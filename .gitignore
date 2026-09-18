@@ -1,0 +1,57 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.python-version
+
+# ---------- 测试 / Lint 缓存 ----------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ---------- 数据（raw / interim / processed 均不入库）----------
+data/*
+!data/.gitkeep
+
+# ---------- 训练工件 ----------
+artifacts/*
+!artifacts/.gitkeep
+runs/*
+!runs/.gitkeep
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.gguf
+*.arrow
+
+# ---------- HF / 实验追踪缓存 ----------
+.cache/
+models--*/
+hf_cache/
+wandb/
+mlruns/
+tensorboard/
+lightning_logs/
+
+# ---------- 环境变量与密钥 ----------
+.env
+.env.*
+!.env.example
+
+# ---------- IDE / OS ----------
+.idea/
+.vscode/
+.DS_Store
+
+# ---------- Notebook ----------
+.ipynb_checkpoints/
