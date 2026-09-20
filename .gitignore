@@ -26,6 +26,9 @@ artifacts/*
 !artifacts/.gitkeep
 runs/*
 !runs/.gitkeep
+checkpoints/
+output/
+outputs/
 *.pt
 *.ckpt
 *.safetensors
@@ -33,6 +36,18 @@ runs/*
 *.onnx
 *.gguf
 *.arrow
+
+# ---------- 日志 ----------
+logs/
+*.log
+
+# ---------- 序列化数据（防遗漏在 data/ 之外）----------
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.h5
+*.feather
 
 # ---------- HF / 实验追踪缓存 ----------
 .cache/
