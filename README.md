@@ -10,9 +10,11 @@
 | 维度 | 内容 |
 |---|---|
 | 方法 | **SIDReasoner**（主）、**TIGER**、**SASRec**（基线） |
-| 数据集 | Amazon Reviews 2023：**Video Games**、**Office Products** |
-| 预处理 | 5-core 过滤；滑窗截断（max len = 10）；按时序 8:1:1 切分 train/val/test |
+| 数据集 | Amazon Reviews 2018 5-core：**Video Games**、**Office Products**（SIDReasoner 发布的数据包，时间窗 2016-10 ~ 2018-11） |
+| 预处理 | 5-core 过滤；滑窗截断（max len = 10）；按时序 8:1:1 切分 train/val/test（数据包已提供成品） |
 | 指标 | 全目录排名下的 Recall@{5,10}、NDCG@{5,10} |
+
+复现结果与论文 Table 2 的对照见 [`results/reproduction.md`](results/reproduction.md)。
 
 SIDReasoner 是两阶段框架：
 
@@ -57,101 +59,80 @@ SIDReasoner 是两阶段框架：
 Reasoning4GenRec-Reproduction/
 ├── README.md
 ├── .gitignore
-├── .env.example            # 教师模型 API key 模板（复制为 .env，不入库）
-├── pyproject.toml          # 依赖与打包（src 布局；extras: dev / teacher / grpo）
-├── Makefile                # 常用任务入口
-├── configs/
-│   ├── data/               # games.yaml / office.yaml（路径、5-core、滑窗、切分比例）
-│   ├── model/              # sasrec.yaml / tiger.yaml / rqvae.yaml / sidreasoner.yaml
-│   ├── stage/              # synthesis / alignment / activation / grpo 的训练超参
-│   └── exp/                # 实验组合（data × model × stage 的完整引用）
-├── src/r4gr/
-│   ├── data/               # DatasetBundle 构建（深模块）
-│   ├── semid/              # RQ-VAE 训练 + SidTable + 合法前缀 Trie（深模块）
+├── Makefile                # 常用任务入口（games-sasrec / office-tiger / smoke ...）
+├── configs/                # 预留：数据 / 模型 / 实验配置（当前基线用命令行参数）
+├── src/
+│   ├── data/
+│   │   ├── bundle.py       # CSV → DatasetBundle（train/valid/test + catalog）
+│   │   └── sid.py          # SidTable：item↔SID、SID 冲突表、合法前缀 Trie
 │   ├── models/
-│   │   ├── sasrec/         # 判别式基线
-│   │   └── tiger/          # 生成式检索基线（编码-解码 + 约束束搜）
-│   ├── reasoner/           # SIDReasoner 全流水线
-│   │   ├── corpus/         # 多任务模板 + 教师语料合成（teacher adapter 在此）
-│   │   ├── alignment/      # 词表扩展 + 多任务 SFT
-│   │   ├── activation/     # 冷启动激活 SFT（1 epoch）
-│   │   └── grpo/           # verl 集成 + reward 定义
-│   ├── train/              # SASRec / TIGER 的通用训练循环
-│   ├── eval/               # 模型无关的评估（全目录排名）
-│   └── cli.py              # 唯一命令行入口
-├── scripts/                # 端到端流水线脚本（如 run_games_sasrec.sh）
-├── tests/                  # 按接口测试（不 mock 内部实现）
-├── results/                # 入库：复现指标 vs 论文指标的对照表
+│   │   ├── sasrec/
+│   │   │   ├── minionerec.py   # MiniOneRec 原版 SASRec（论文基线实现）
+│   │   │   └── model.py        # 备用：共享 embedding 的 SASRec 变体
+│   │   └── tiger/
+│   │       └── model.py        # T5-style encoder-decoder + trie 约束束搜
+│   ├── train/
+│   │   ├── train_sasrec_mini.py  # SASRec 训练（MiniOneRec 协议，早停 NDCG@20）
+│   │   ├── train_sasrec.py       # 备用 SASRec 训练
+│   │   ├── train_tiger.py        # TIGER 训练（Adam/Adafactor + warmup/inv-sqrt）
+│   │   └── common.py             # 种子、设备、论文指标对照表
+│   ├── eval/
+│   │   ├── evaluate.py     # 全目录评测（SASRec / TIGER）
+│   │   └── metrics.py      # Recall@K / NDCG@K
+│   ├── semid/              # 预留：RQ-VAE（SID 已由数据包提供，暂不需要）
+│   └── reasoner/           # 预留：SIDReasoner 四阶段
+├── scripts/                # 端到端脚本（run_games_sasrec.sh 等）
+├── tests/                  # 冒烟测试（tests/test_smoke.py）
+├── results/                # 入库：复现指标 vs 论文指标对照
 ├── data/                   # 不入库：raw / interim / processed
-├── artifacts/              # 不入库：SidTable、扩展词表、合成语料、checkpoint
-└── runs/                   # 不入库：日志、tensorboard / wandb
+└── runs/                   # 不入库：checkpoint、日志、metrics.json
 ```
 
-## 模块设计
+## 基线实现说明
 
-设计原则：**深模块**——小接口后面藏尽可能多的行为。每个模块一行列出调用方需要知道的全部（接口），复杂度全部留在实现里：
-
-| 模块 | 接口（调用方需要知道的全部） | 隐藏在实现里的复杂度 |
+| 模型 | 实现来源 | 关键设计 |
 |---|---|---|
-| `r4gr.data` | `build(cfg) -> DatasetBundle`（交互序列、train/val/test、item 元数据、item 目录） | 下载、5-core、按时间排序、滑窗截断、8:1:1 切分、去重 |
-| `r4gr.semid` | `fit(meta, cfg) -> SidTable`；`assign(item) -> codes[L]`；`trie`（合法 SID 前缀） | 文本编码器、RQ-VAE 训练、残差量化、码本管理、碰撞处理 |
-| `r4gr.models.sasrec` | Ranker 契约：`rank(context) -> 全目录得分` | 自注意力编码 + item embedding + softmax |
-| `r4gr.models.tiger` | 同上 Ranker 契约 | 编码-解码 transformer + Trie 约束束搜 |
-| `r4gr.reasoner.corpus` | `build_tasks(bundle, sid) -> jsonl`；`enrich(bundle, sid, teacher) -> jsonl` | 多任务模板（item 预测 / SID 翻译）、教师提示词、teacher adapter（OpenAI 兼容 API / 本地 vLLM） |
-| `r4gr.reasoner.alignment` | `train(cfg, corpus) -> ckpt`（含扩展词表） | 词表扩展、全参微调、早停（patience=2，按 eval loss 选点） |
-| `r4gr.reasoner.activation` | `train(cfg, ckpt, sft_data) -> ckpt` | reason-then-recommend 模板 |
-| `r4gr.reasoner.grpo` | `train(cfg, ckpt) -> ckpt`；`Reward: (rollout, gt) -> float` | verl 集成、rollout 采样、前缀奖励 + 格式奖励 |
-| `r4gr.eval` | `evaluate(ranker, bundle, cutoffs) -> MetricsTable` | 全目录排名、Recall/NDCG 计算、落盘 |
-| `r4gr.cli` | `r4gr <stage> --config ...` | 配置解析、日志、分布式启动 |
+| SASRec | 忠实移植 MiniOneRec 的 `sasrec.py` + `SASRecModules_ori.py`（SIDReasoner 基于 MiniOneRec 构建，数据列格式完全一致） | 单层 self-attention + FFN、独立输出头 `s_fc`（非共享 embedding）、右填充（pad=item_num）、BCE（每样本 1 正 1 负）、Adam(lr=1e-3, eps=1e-8, wd=1e-5)、早停 patience=20（valid NDCG@20） |
+| TIGER | 依据 TIGER 原论文（Rajput et al., NeurIPS 2023）+ GAMER 的 T5 实现（官方 google-research 代码已下架） | T5-style encoder-decoder（随机初始化）、输入=历史物品 SID token 序列（每物品 3 token）、输出自回归 SID+EOS、CE loss、trie 约束束搜（beam=20，保证合法）、SID 冲突展开为多物品 |
 
-**接缝（seam）位置**：
+核心模块：
 
-- **工件接缝**：各阶段以文件为界面，天然可独立重跑与缓存；
-- **Ranker 接缝**：三个模型满足同一 Ranker 契约 → 评估器与评估测试只写一份，三个消费者共享同一接缝；
-- **Teacher 接缝**：教师模型在 `reasoner/corpus` 内部，adapter 对接 OpenAI 兼容 API 与本地 vLLM——两个 adapter，真实接缝，离线可替换；
-- **Reward 接缝**：reward 是纯函数 `(rollout, ground_truth) -> float`，不依赖任何在线状态，可直接单元测试。
-
-测试策略：全部通过模块接口测试，不穿透到内部实现——数据管道校验切分无泄漏与时序正确性；RQ-VAE 校验重建误差下降与 SID 唯一性；reward 校验前缀奖励公式与格式奖励的 trie 命中；评估器用玩具目录对照手算指标；LLM 各阶段用 2 层小模型做冒烟测试。
+| 模块 | 接口 | 说明 |
+|---|---|---|
+| `src.data.bundle` | `load_bundle(data_root, category) -> DatasetBundle` | 读取数据包 CSV → train/valid/test 的 (history ids/sids, target id/sid) |
+| `src.data.sid` | `SidTable.from_index_json(path)`；`allowed_codes(prefix)` | item↔SID 双向映射、SID→items 冲突表、合法前缀 Trie |
+| `src.models.sasrec.minionerec` | `SASRecMiniOneRec(hidden, item_num, state_size, dropout)` | MiniOneRec 原版 SASRec |
+| `src.models.tiger.model` | `build_tiger(sid_table, ...)`；`beam_search_items(...)` | T5-style TIGER + 约束束搜 |
+| `src.train.train_sasrec_mini` / `train_tiger` | 命令行入口 | 训练 + 逐 epoch valid 早停 + test 指标 + `runs/*/metrics.json` |
+| `src.eval.evaluate` / `metrics` | `evaluate_sasrec/evaluate_tiger`；`rank_metrics` | 全目录排名 Recall/NDCG@{5,10,(20)} |
 
 ## 环境安装
 
 ```bash
-git clone <this-repo>
 cd Reasoning4GenRec-Reproduction
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"        # 基础 + 测试
-pip install -e ".[teacher]"    # 教师语料合成（openai sdk）
-pip install -e ".[grpo]"       # GRPO 阶段（verl、vllm）
-cp .env.example .env           # 填入教师模型 API key
+python3 -m venv .venv && source .venv/bin/activate
+pip install torch transformers pandas numpy pyyaml
 ```
+
+数据：SIDReasoner 发布的数据包（Amazon 2018 5-core，Games/Office/Industrial），
+解压后置于 `data/raw/Amazon/`（`train/ valid/ test/ info/ index/` 五个子目录）。
 
 ## 快速开始
 
-目标命令行接口（随实现逐步可用）：
-
 ```bash
-# 1. 数据
-r4gr data build --config configs/data/games.yaml
+# SASRec（MiniOneRec 原版实现）
+make games-sasrec      # 或 bash scripts/run_games_sasrec.sh
+make office-sasrec
 
-# 2. 语义 ID（TIGER 与 SIDReasoner 共用）
-r4gr semid fit --config configs/exp/games_semid.yaml
+# TIGER（4 层 d192，trie 约束束搜）
+make games-tiger
+make office-tiger
 
-# 3. 基线
-r4gr train sasrec --config configs/exp/games_sasrec.yaml
-r4gr train tiger --config configs/exp/games_tiger.yaml
-
-# 4. SIDReasoner 四个阶段
-r4gr synth enrich --config configs/exp/games_synth.yaml
-r4gr train alignment --config configs/exp/games_alignment.yaml
-r4gr train activation --config configs/exp/games_activation.yaml
-r4gr train grpo --config configs/exp/games_grpo.yaml
-
-# 5. 评估与汇总
-r4gr eval --config configs/exp/games_sasrec.yaml --ckpt runs/.../best.pt
-r4gr report                      # 汇总 runs/ -> results/
+# 冒烟测试
+make smoke
 ```
 
-Office 数据集将上述命令中的 `games` 换为 `office`。
+结果（checkpoint + metrics.json）写入 `runs/`。
 
 ## 与论文对齐的关键设置
 
@@ -159,6 +140,8 @@ Office 数据集将上述命令中的 `games` 换为 `office`。
 |---|---|
 | 底座模型 | Qwen3-1.7B，全参数微调 |
 | SID 构造 | RQ-VAE 残差量化；文本编码器与码本配置以官方代码为准 |
+| SASRec（基线） | MiniOneRec 实现；hidden=32、dropout=0.3、batch=1024、Adam(lr=1e-3, wd=1e-5)、BCE |
+| TIGER（基线） | T5-style（4 层 d192、4 头、d_ff=768）、batch=256、Adam(lr=1e-3, warmup=1000, inverse-sqrt)、beam=20 |
 | 对齐训练 | AdamW，batch size 1024，早停 patience=2（按 eval loss 选点） |
 | 激活阶段 | 1 epoch SFT |
 | GRPO（verl） | rollout 数 16；KL 系数 1e-3；batch size 256；lr 5e-7；格式奖励权重 λ=0.1 |
@@ -174,23 +157,23 @@ Office 数据集将上述命令中的 `games` 换为 `office`。
 | TIGER | 0.0489 | 0.0300 | 0.0763 | 0.0402 | 0.1270 | 0.1037 | 0.1429 | 0.1121 |
 | SIDReasoner | 0.0710 | 0.0460 | 0.1031 | 0.0563 | 0.1373 | 0.1119 | 0.1648 | 0.1208 |
 
-复现结果将记录在 `results/` 下，与上表逐项对照。
+复现结果与逐项对照见 [`results/reproduction.md`](results/reproduction.md)。
 
 ## 测试
 
 ```bash
-pytest tests/ -x
+make smoke     # 等价于 .venv/bin/python tests/test_smoke.py
 ```
 
 ## 路线图
 
-- [ ] Phase 0：仓库骨架、pyproject、配置系统、CI
-- [ ] Phase 1：`r4gr.data`（Games / Office 就绪，切分无泄漏测试通过）
-- [ ] Phase 2：SASRec + `r4gr.eval`（第一条端到端基线跑通）
-- [ ] Phase 3：`r4gr.semid` + TIGER
+- [x] Phase 0：仓库骨架、Makefile、端到端脚本
+- [x] Phase 1：数据加载（`src.data`，Games / Office 就绪，切分无泄漏校验通过）
+- [x] Phase 2：SASRec + `src.eval`（Games / Office 复现完成，偏差 ≤3%）
+- [x] Phase 3：TIGER（Games / Office 复现完成，偏差 ≤6%）
 - [ ] Phase 4：SIDReasoner 语料合成 → 对齐训练 → 激活训练
 - [ ] Phase 5：GRPO（verl）
-- [ ] Phase 6：结果汇总、与论文指标对齐分析
+- [ ] Phase 6：结果汇总、与论文指标对齐分析（见 results/reproduction.md）
 
 ## 引用
 
