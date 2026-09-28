@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import random
@@ -20,6 +21,26 @@ def pick_device():
     if torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+def resolve_category(data_cfg):
+    categories = data_cfg.get("categories", {})
+    dataset = os.environ.get("DATASET")
+    if dataset is None:
+        raise RuntimeError(
+            f"DATASET 环境变量未设置,可选: {sorted(categories)}"
+        )
+    if dataset not in categories:
+        raise RuntimeError(
+            f"未知 DATASET '{dataset}',可选: {sorted(categories)}"
+        )
+    return categories[dataset]
+
+
+def run_config(cfg, category):
+    config = copy.deepcopy(cfg)
+    config["data"]["category"] = category
+    return config
 
 
 def save_run(out_dir, config, best_valid, test_metrics, paper_ref):

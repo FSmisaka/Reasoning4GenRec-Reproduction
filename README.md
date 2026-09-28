@@ -17,14 +17,27 @@ pip install torch transformers pandas numpy pyyaml
 
 # quick start
 
+所有超参数都在 `config/` 下与模型同名的配置文件中定义(`sasrec.py`、`sasrec_mini.py`、`tiger.py`),
+训练脚本不接受任何命令行超参,调参直接改配置文件。
+数据集通过 `DATASET` 环境变量选择(`games` / `office`,见配置文件中的 `data.categories`)。
+模型同名文件在 `src/models/`(模型)、`src/train/`(训练入口)、`scripts/<dataset>/`(启动脚本)中一一对应。
+
 ```bash
-# SASRec（MiniOneRec 原版实现）
+# SASRec
 make games-sasrec
 make office-sasrec
 
-# TIGER（4 层 d192，trie 约束束搜）
+# SASRec(MiniOneRec 原版实现)
+make games-sasrec-mini
+make office-sasrec-mini
+
+# TIGER(4 层 d128,trie 约束束搜)
 make games-tiger
 make office-tiger
+
+# 等价的手动运行方式
+DATASET=games .venv/bin/python -m src.train.tiger
+# 或 scripts/games/tiger.sh
 
 # 冒烟测试
 make smoke

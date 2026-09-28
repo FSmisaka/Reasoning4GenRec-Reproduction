@@ -1,16 +1,18 @@
-import argparse
 import os
 import time
 
 import torch
 
+from config import load_config
 from src.data.bundle import load_bundle
 from src.eval.evaluate import evaluate_sasrec
-from src.models.sasrec.model import SASRec
+from src.models.sasrec import SASRec
 from src.train.common import (
     PAPER_REF,
     pick_device,
     print_comparison,
+    resolve_category,
+    run_config,
     save_run,
     set_seed,
 )
@@ -40,43 +42,37 @@ def build_batches(split, n_items, max_len, batch_size, shuffle, device):
         yield seq.to(device), labels.to(device), exclude.to(device)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--category", default="Video_Games")
-    parser.add_argument(
-        "--data-root", default="data/raw/Amazon"
-    )
-    parser.add_argument("--loss", default="bce", choices=["bce", "ce"])
-    parser.add_argument("--epochs", type=int, default=500)
-    parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--hidden", type=int, default=128)
-    parser.add_argument("--layers", type=int, default=2)
-    parser.add_argument("--heads", type=int, default=2)
-    parser.add_argument("--dropout", type=float, default=0.5)
-    parser.add_argument("--max-len", type=int, default=10)
-    parser.add_argument("--eval-every", type=int, default=2)
-    parser.add_argument("--patience", type=int, default=10)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--out", default=None)
-    args = parser.parse_args()
+def main(cfg=None):
+    cfg = cfg or load_config("sasrec")
+    data_cfg, model_cfg = cfg["data"], cfg["model"]
+    train_cfg, eval_cfg = cfg["training"], cfg["evaluation"]
+    if train_cfg["loss"] not in train_cfg["loss_choices"]:
+        raise ValueError(
+            f"loss={train_cfg['loss']!r} 无效,可选: {train_cfg['loss_choices']}"
+        )
+    category = resolve_category(data_cfg)
+    run = run_config(cfg, category)
 
-    set_seed(args.seed)
+    set_seed(train_cfg["seed"])
     device = pick_device()
-    bundle = load_bundle(args.data_root, args.category)
+    bundle = load_bundle(data_cfg["root"], category)
     n_items = bundle.n_items
     model = SASRec(
         n_items=n_items,
-        max_seq_len=args.max_len,
-        hidden=args.hidden,
-        n_layers=args.layers,
-        n_heads=args.heads,
-        dropout=args.dropout,
+        max_seq_len=model_cfg["max_seq_len"],
+        hidden=model_cfg["hidden"],
+        n_layers=model_cfg["n_layers"],
+        n_heads=model_cfg["n_heads"],
+        d_inner=model_cfg["d_inner"],
+        dropout=model_cfg["dropout"],
+        init_std=model_cfg["init_std"],
+        layer_norm_eps=model_cfg["layer_norm_eps"],
+        neg_resample_rounds=model_cfg["neg_resample_rounds"],
     ).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=train_cfg["lr"])
 
-    out_dir = args.out or os.path.join(
-        "runs", f"{args.category}_sasrec_{args.loss}"
+    out_dir = train_cfg["out"] or os.path.join(
+        "runs", f"{category}_sasrec_{train_cfg['loss']}"
     )
     os.makedirs(out_dir, exist_ok=True)
 
@@ -87,14 +83,19 @@ def main():
     step = 0
     t0 = time.time()
 
-    for epoch in range(args.epochs):
+    for epoch in range(train_cfg["epochs"]):
         model.train()
         total_loss, n_batches = 0.0, 0
         for seq, labels, exclude in build_batches(
-            bundle.train, n_items, args.max_len, args.batch_size, True, device
+            bundle.train,
+            n_items,
+            model_cfg["max_seq_len"],
+            train_cfg["batch_size"],
+            True,
+            device,
         ):
             optimizer.zero_grad()
-            if args.loss == "bce":
+            if train_cfg["loss"] == "bce":
                 loss = model.bce_loss(seq, labels, exclude)
             else:
                 loss = model.ce_loss(seq, labels)
@@ -103,9 +104,14 @@ def main():
             total_loss += loss.item()
             n_batches += 1
             step += 1
-        if (epoch + 1) % args.eval_every == 0:
+        if (epoch + 1) % train_cfg["eval_every"] == 0:
             valid_metrics = evaluate_sasrec(
-                model, bundle.valid, device, batch_size=512, max_len=args.max_len
+                model,
+                bundle.valid,
+                device,
+                k_list=tuple(eval_cfg["k_list"]),
+                batch_size=eval_cfg["batch_size"],
+                max_len=model_cfg["max_seq_len"],
             )
             marker = ""
             if valid_metrics["NDCG@10"] > best_ndcg:
@@ -126,29 +132,34 @@ def main():
                 f"({time.time()-t0:.0f}s){marker}",
                 flush=True,
             )
-            if bad_evals >= args.patience:
+            if bad_evals >= train_cfg["patience"]:
                 print("early stop")
                 break
 
     model.load_state_dict(best_state)
     test_metrics = evaluate_sasrec(
-        model, bundle.test, device, batch_size=512, max_len=args.max_len
+        model,
+        bundle.test,
+        device,
+        k_list=tuple(eval_cfg["k_list"]),
+        batch_size=eval_cfg["batch_size"],
+        max_len=model_cfg["max_seq_len"],
     )
     torch.save(
         {
             "state_dict": best_state,
-            "config": vars(args),
+            "config": run,
             "n_items": n_items,
         },
         os.path.join(out_dir, "best.pt"),
     )
-    print_comparison("SASRec", args.category, test_metrics)
+    print_comparison("SASRec", category, test_metrics)
     save_run(
         out_dir,
-        vars(args),
+        run,
         best_valid,
         test_metrics,
-        PAPER_REF[(args.category, "SASRec")],
+        PAPER_REF[(category, "SASRec")],
     )
 
 

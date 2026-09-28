@@ -67,7 +67,15 @@ class PositionwiseFeedForward(nn.Module):
 
 
 class SASRecMiniOneRec(nn.Module):
-    def __init__(self, hidden_size, item_num, state_size, dropout, num_heads=1):
+    def __init__(
+        self,
+        hidden_size,
+        item_num,
+        state_size,
+        dropout,
+        num_heads=1,
+        init_std=0.01,
+    ):
         super().__init__()
         self.state_size = state_size
         self.hidden_size = hidden_size
@@ -76,7 +84,7 @@ class SASRecMiniOneRec(nn.Module):
         self.item_embeddings = nn.Embedding(
             num_embeddings=item_num + 1, embedding_dim=hidden_size
         )
-        nn.init.normal_(self.item_embeddings.weight, 0, 0.01)
+        nn.init.normal_(self.item_embeddings.weight, 0, init_std)
         self.positional_embeddings = nn.Embedding(
             num_embeddings=state_size, embedding_dim=hidden_size
         )

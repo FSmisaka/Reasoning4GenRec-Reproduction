@@ -1,13 +1,13 @@
-import argparse
 import os
 import random
 import time
 
 import torch
 
+from config import load_config
 from src.data.bundle import load_bundle
 from src.eval.evaluate import evaluate_tiger
-from src.models.tiger.model import (
+from src.models.tiger import (
     build_tiger,
     encode_history,
     encode_target,
@@ -16,6 +16,8 @@ from src.train.common import (
     PAPER_REF,
     pick_device,
     print_comparison,
+    resolve_category,
+    run_config,
     save_run,
     set_seed,
 )
@@ -44,79 +46,75 @@ def build_batches(split, sid_table, batch_size, max_items, shuffle):
         yield input_ids, attention_mask, labels
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--category", default="Video_Games")
-    parser.add_argument("--data-root", default="data/raw/Amazon")
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--d-model", type=int, default=128)
-    parser.add_argument("--d-ff", type=int, default=512)
-    parser.add_argument("--layers", type=int, default=2)
-    parser.add_argument("--heads", type=int, default=4)
-    parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--max-items", type=int, default=10)
-    parser.add_argument("--num-beams", type=int, default=20)
-    parser.add_argument("--eval-every", type=int, default=5)
-    parser.add_argument("--eval-subset", type=int, default=2000)
-    parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--warmup-steps", type=int, default=0)
-    parser.add_argument(
-        "--scheduler", default="constant", choices=["constant", "invsq"]
-    )
-    parser.add_argument(
-        "--optimizer", default="adam", choices=["adam", "adafactor"]
-    )
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--out", default=None)
-    args = parser.parse_args()
+def main(cfg=None):
+    cfg = cfg or load_config("tiger")
+    data_cfg, model_cfg = cfg["data"], cfg["model"]
+    train_cfg, eval_cfg = cfg["training"], cfg["evaluation"]
+    gen_cfg = cfg["generation"]
+    if train_cfg["optimizer"] not in train_cfg["optimizer_choices"]:
+        raise ValueError(
+            f"optimizer={train_cfg['optimizer']!r} 无效, "
+            f"可选: {train_cfg['optimizer_choices']}"
+        )
+    if train_cfg["scheduler"] not in train_cfg["scheduler_choices"]:
+        raise ValueError(
+            f"scheduler={train_cfg['scheduler']!r} 无效, "
+            f"可选: {train_cfg['scheduler_choices']}"
+        )
+    category = resolve_category(data_cfg)
+    run = run_config(cfg, category)
 
-    set_seed(args.seed)
+    set_seed(train_cfg["seed"])
     device = pick_device()
-    bundle = load_bundle(args.data_root, args.category)
+    bundle = load_bundle(data_cfg["root"], category)
     sid_table = bundle.sid_table
     model = build_tiger(
         sid_table,
-        d_model=args.d_model,
-        d_ff=args.d_ff,
-        num_layers=args.layers,
-        num_heads=args.heads,
-        dropout=args.dropout,
+        d_model=model_cfg["d_model"],
+        d_ff=model_cfg["d_ff"],
+        num_layers=model_cfg["num_layers"],
+        num_heads=model_cfg["num_heads"],
+        dropout=model_cfg["dropout"],
+        feed_forward_proj=model_cfg["feed_forward_proj"],
     ).to(device)
-    if args.optimizer == "adafactor":
+    if train_cfg["optimizer"] == "adafactor":
         from transformers.optimization import Adafactor
 
         optimizer = Adafactor(
             model.parameters(),
-            lr=args.lr,
+            lr=train_cfg["lr"],
             scale_parameter=False,
             relative_step=False,
             warmup_init=False,
         )
     else:
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    if args.scheduler == "invsq":
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=train_cfg["lr"]
+        )
+    if train_cfg["scheduler"] == "invsq":
         from transformers.optimization import get_inverse_sqrt_schedule
 
         scheduler = get_inverse_sqrt_schedule(
-            optimizer, num_warmup_steps=args.warmup_steps
+            optimizer, num_warmup_steps=train_cfg["warmup_steps"]
         )
     else:
         scheduler = None
 
-    out_dir = args.out or os.path.join("runs", f"{args.category}_tiger")
+    out_dir = train_cfg["out"] or os.path.join("runs", f"{category}_tiger")
     os.makedirs(out_dir, exist_ok=True)
 
     valid_split = bundle.valid
-    if args.eval_subset and args.eval_subset < len(valid_split):
+    if (
+        train_cfg["eval_subset"]
+        and train_cfg["eval_subset"] < len(valid_split)
+    ):
 
         class Subset:
             pass
 
         sub = Subset()
-        sub.hist_sids = valid_split.hist_sids[: args.eval_subset]
-        sub.targets = valid_split.targets[: args.eval_subset]
+        sub.hist_sids = valid_split.hist_sids[: train_cfg["eval_subset"]]
+        sub.targets = valid_split.targets[: train_cfg["eval_subset"]]
         valid_eval = sub
     else:
         valid_eval = valid_split
@@ -127,11 +125,15 @@ def main():
     bad_evals = 0
     t0 = time.time()
 
-    for epoch in range(args.epochs):
+    for epoch in range(train_cfg["epochs"]):
         model.train()
         total_loss, n_batches = 0.0, 0
         for input_ids, attention_mask, labels in build_batches(
-            bundle.train, sid_table, args.batch_size, args.max_items, True
+            bundle.train,
+            sid_table,
+            train_cfg["batch_size"],
+            train_cfg["max_items"],
+            True,
         ):
             input_ids = input_ids.to(device)
             attention_mask = attention_mask.to(device)
@@ -148,14 +150,16 @@ def main():
                 scheduler.step()
             total_loss += out.loss.item()
             n_batches += 1
-        if (epoch + 1) % args.eval_every == 0:
+        if (epoch + 1) % train_cfg["eval_every"] == 0:
             valid_metrics = evaluate_tiger(
                 model,
                 valid_eval,
                 sid_table,
                 device,
-                num_beams=args.num_beams,
-                max_len=args.max_items,
+                k_list=tuple(eval_cfg["k_list"]),
+                num_beams=gen_cfg["num_beams"],
+                batch_size=gen_cfg["batch_size"],
+                max_len=train_cfg["max_items"],
             )
             marker = ""
             if valid_metrics["NDCG@10"] > best_ndcg:
@@ -176,7 +180,7 @@ def main():
                 f"({time.time()-t0:.0f}s){marker}",
                 flush=True,
             )
-            if bad_evals >= args.patience:
+            if bad_evals >= train_cfg["patience"]:
                 print("early stop")
                 break
 
@@ -186,20 +190,22 @@ def main():
         bundle.test,
         sid_table,
         device,
-        num_beams=args.num_beams,
-        max_len=args.max_items,
+        k_list=tuple(eval_cfg["k_list"]),
+        num_beams=gen_cfg["num_beams"],
+        batch_size=gen_cfg["batch_size"],
+        max_len=train_cfg["max_items"],
     )
     torch.save(
-        {"state_dict": best_state, "config": vars(args)},
+        {"state_dict": best_state, "config": run},
         os.path.join(out_dir, "best.pt"),
     )
-    print_comparison("TIGER", args.category, test_metrics)
+    print_comparison("TIGER", category, test_metrics)
     save_run(
         out_dir,
-        vars(args),
+        run,
         best_valid,
         test_metrics,
-        PAPER_REF[(args.category, "TIGER")],
+        PAPER_REF[(category, "TIGER")],
     )
 
 

@@ -1,7 +1,5 @@
-import argparse
 import ast
 import copy
-import json
 import os
 import random
 import time
@@ -12,13 +10,15 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from src.data.bundle import load_bundle
+from config import load_config
 from src.eval.metrics import rank_metrics, rank_of
-from src.models.sasrec.minionerec import SASRecMiniOneRec
+from src.models.sasrec_mini import SASRecMiniOneRec
 from src.train.common import (
     PAPER_REF,
     pick_device,
     print_comparison,
+    resolve_category,
+    run_config,
     save_run,
     set_seed,
 )
@@ -50,76 +50,78 @@ def prepare_frame(df, item_num, seq_size):
 
 
 @torch.no_grad()
-def evaluate_model(model, split_df, item_num, seq_size, device, k_list=(5, 10, 20)):
+def evaluate_model(
+    model, split_df, item_num, seq_size, device, k_list, batch_size
+):
     model.eval()
     seqs, lens, targets = prepare_frame(split_df, item_num, seq_size)
     ranks = []
-    bs = 1024
-    for start in range(0, len(targets), bs):
+    for start in range(0, len(targets), batch_size):
         logits = model(
-            seqs[start : start + bs].to(device),
-            lens[start : start + bs].to(device),
+            seqs[start : start + batch_size].to(device),
+            lens[start : start + batch_size].to(device),
         )
         _, topk = torch.topk(logits, max(k_list), dim=1)
         topk = topk.cpu().tolist()
-        for i, tgt in enumerate(targets[start : start + bs].tolist()):
+        for i, tgt in enumerate(targets[start : start + batch_size].tolist()):
             ranks.append(rank_of(tgt, topk[i]))
     model.train()
     return rank_metrics(ranks, k_list)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--category", default="Video_Games")
-    parser.add_argument("--data-root", default="data/raw/Amazon")
-    parser.add_argument("--hidden-factor", type=int, default=32)
-    parser.add_argument("--dropout", type=float, default=0.3)
-    parser.add_argument("--num-heads", type=int, default=1)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--l2-decay", type=float, default=1e-5)
-    parser.add_argument("--batch-size", type=int, default=1024)
-    parser.add_argument("--epochs", type=int, default=500)
-    parser.add_argument("--patience", type=int, default=20)
-    parser.add_argument("--seq-size", type=int, default=10)
-    parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--out", default=None)
-    args = parser.parse_args()
+def main(cfg=None):
+    cfg = cfg or load_config("sasrec_mini")
+    data_cfg, model_cfg = cfg["data"], cfg["model"]
+    train_cfg, eval_cfg = cfg["training"], cfg["evaluation"]
+    category = resolve_category(data_cfg)
+    run = run_config(cfg, category)
 
-    set_seed(args.seed)
+    set_seed(train_cfg["seed"])
     device = pick_device()
 
-    data_root = args.data_root
-    fname = f"{args.category}_5_2016-10-2018-11.csv"
+    data_root = data_cfg["root"]
+    fname = f"{category}_5_2016-10-2018-11.csv"
     train_df = pd.read_csv(os.path.join(data_root, "train", fname))
     valid_df = pd.read_csv(os.path.join(data_root, "valid", fname))
     test_df = pd.read_csv(os.path.join(data_root, "test", fname))
     info_path = os.path.join(
-        data_root, "info", f"{args.category}_5_2016-10-2018-11.txt"
+        data_root, "info", f"{category}_5_2016-10-2018-11.txt"
     )
     item_num = len(open(info_path).readlines())
-    seq_size = args.seq_size
+    seq_size = model_cfg["seq_size"]
 
     train_seqs, train_lens, train_targets = prepare_frame(
         train_df, item_num, seq_size
     )
     loader = DataLoader(
         RecDataset(train_seqs, train_lens, train_targets),
-        batch_size=args.batch_size,
+        batch_size=train_cfg["batch_size"],
         shuffle=True,
     )
 
     model = SASRecMiniOneRec(
-        args.hidden_factor, item_num, seq_size, args.dropout, args.num_heads
+        model_cfg["hidden_factor"],
+        item_num,
+        seq_size,
+        model_cfg["dropout"],
+        model_cfg["num_heads"],
+        model_cfg["init_std"],
     ).to(device)
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=args.lr, eps=1e-8, weight_decay=args.l2_decay
+        model.parameters(),
+        lr=train_cfg["lr"],
+        eps=train_cfg["adam_eps"],
+        weight_decay=train_cfg["l2_decay"],
     )
     loss_fn = nn.BCEWithLogitsLoss()
 
-    out_dir = args.out or os.path.join(
-        "runs", f"{args.category}_sasrec_minionerec"
+    out_dir = train_cfg["out"] or os.path.join(
+        "runs", f"{category}_sasrec_mini"
     )
     os.makedirs(out_dir, exist_ok=True)
+
+    k_list = tuple(eval_cfg["k_list"])
+    best_key = f"NDCG@{max(k_list)}"
 
     best_ndcg = -1.0
     best_valid = None
@@ -128,7 +130,7 @@ def main():
     early_stop = 0
     t0 = time.time()
 
-    for epoch in range(args.epochs):
+    for epoch in range(train_cfg["epochs"]):
         total_loss, n_batches = 0.0, 0
         for seq, len_seq, target in loader:
             target_neg = []
@@ -156,9 +158,15 @@ def main():
             n_batches += 1
 
         valid_metrics = evaluate_model(
-            model, valid_df, item_num, seq_size, device
+            model,
+            valid_df,
+            item_num,
+            seq_size,
+            device,
+            k_list,
+            eval_cfg["batch_size"],
         )
-        ndcg20 = valid_metrics["NDCG@20"]
+        ndcg20 = valid_metrics[best_key]
         marker = ""
         if ndcg20 > best_ndcg:
             best_ndcg = ndcg20
@@ -177,23 +185,26 @@ def main():
                 f"({time.time()-t0:.0f}s){marker}",
                 flush=True,
             )
-        if early_stop > args.patience:
+        if early_stop > train_cfg["patience"]:
             print(f"early stop at epoch {epoch}, best epoch {best_epoch}")
             break
 
     model.load_state_dict(best_state)
-    test_metrics = evaluate_model(model, test_df, item_num, seq_size, device)
+    test_metrics = evaluate_model(
+        model, test_df, item_num, seq_size, device, k_list,
+        eval_cfg["batch_size"],
+    )
     torch.save(
-        {"state_dict": best_state, "config": vars(args), "item_num": item_num},
+        {"state_dict": best_state, "config": run, "item_num": item_num},
         os.path.join(out_dir, "best.pt"),
     )
-    print_comparison("SASRec", args.category, test_metrics)
+    print_comparison("SASRec", category, test_metrics)
     save_run(
         out_dir,
-        vars(args),
+        run,
         best_valid,
         test_metrics,
-        PAPER_REF[(args.category, "SASRec")],
+        PAPER_REF[(category, "SASRec")],
     )
 
 

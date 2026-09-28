@@ -1,7 +1,7 @@
 import torch
 
 from src.eval.metrics import rank_metrics, rank_of
-from src.models.tiger.model import beam_search_items, encode_history
+from src.models.tiger import beam_search_items, encode_history
 
 
 def _pad_histories(histories, max_len, pad=0):

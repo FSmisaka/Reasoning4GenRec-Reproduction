@@ -17,6 +17,7 @@ def build_tiger(
     num_layers=2,
     num_heads=4,
     dropout=0.1,
+    feed_forward_proj="relu",
 ):
     config = T5Config(
         vocab_size=tiger_vocab_size(sid_table),
@@ -26,7 +27,7 @@ def build_tiger(
         num_heads=num_heads,
         num_decoder_layers=num_layers,
         dropout_rate=dropout,
-        feed_forward_proj="relu",
+        feed_forward_proj=feed_forward_proj,
         pad_token_id=PAD_ID,
         eos_token_id=EOS_ID,
         decoder_start_token_id=PAD_ID,

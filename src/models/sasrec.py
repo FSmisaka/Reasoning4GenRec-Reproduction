@@ -50,10 +50,10 @@ class FeedForward(nn.Module):
 
 
 class EncoderLayer(nn.Module):
-    def __init__(self, d_model, n_heads, d_inner, dropout):
+    def __init__(self, d_model, n_heads, d_inner, dropout, eps=1e-12):
         super().__init__()
-        self.attn = MultiHeadAttention(d_model, n_heads, dropout)
-        self.ffn = FeedForward(d_model, d_inner, dropout)
+        self.attn = MultiHeadAttention(d_model, n_heads, dropout, eps)
+        self.ffn = FeedForward(d_model, d_inner, dropout, eps)
 
     def forward(self, x, attn_mask):
         return self.ffn(self.attn(x, attn_mask))
@@ -69,19 +69,24 @@ class SASRec(nn.Module):
         n_heads=2,
         d_inner=256,
         dropout=0.5,
+        init_std=0.02,
+        layer_norm_eps=1e-12,
+        neg_resample_rounds=16,
     ):
         super().__init__()
         self.n_items = n_items
         self.max_seq_len = max_seq_len
+        self.init_std = init_std
+        self.neg_resample_rounds = neg_resample_rounds
         self.item_embedding = nn.Embedding(
             n_items + 1, hidden, padding_idx=0
         )
         self.position_embedding = nn.Embedding(max_seq_len, hidden)
-        self.LayerNorm = nn.LayerNorm(hidden, eps=1e-12)
+        self.LayerNorm = nn.LayerNorm(hidden, eps=layer_norm_eps)
         self.dropout = nn.Dropout(dropout)
         self.layers = nn.ModuleList(
             [
-                EncoderLayer(hidden, n_heads, d_inner, dropout)
+                EncoderLayer(hidden, n_heads, d_inner, dropout, layer_norm_eps)
                 for _ in range(n_layers)
             ]
         )
@@ -89,7 +94,7 @@ class SASRec(nn.Module):
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
-            module.weight.data.normal_(mean=0.0, std=0.02)
+            module.weight.data.normal_(mean=0.0, std=self.init_std)
             if isinstance(module, nn.Embedding) and module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
         elif isinstance(module, nn.LayerNorm):
@@ -118,8 +123,7 @@ class SASRec(nn.Module):
 
     def last_hidden(self, seq):
         x = self.encode(seq)
-        last_idx = (seq != 0).sum(dim=1) - 1
-        return x[torch.arange(seq.size(0)), last_idx]
+        return x[:, -1]
 
     def full_scores(self, seq):
         h = self.last_hidden(seq)
@@ -145,7 +149,7 @@ class SASRec(nn.Module):
     def _sample_negatives(self, exclude_mask, shape):
         n = exclude_mask.size(1)
         neg = torch.randint(1, n, shape, device=exclude_mask.device)
-        for _ in range(16):
+        for _ in range(self.neg_resample_rounds):
             bad = exclude_mask.gather(1, neg)
             if not bad.any():
                 break

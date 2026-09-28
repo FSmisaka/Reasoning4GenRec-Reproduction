@@ -7,8 +7,8 @@ sys.path.insert(0, ".")
 from src.data.bundle import load_bundle
 from src.data.sid import SidTable
 from src.eval.evaluate import evaluate_sasrec
-from src.models.sasrec.model import SASRec
-from src.models.tiger.model import (
+from src.models.sasrec import SASRec
+from src.models.tiger import (
     build_tiger,
     encode_history,
     encode_target,
