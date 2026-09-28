@@ -51,7 +51,7 @@ CONFIG: Dict[str, Any] = {
         "neg_samples": 3,
         "neg_resample_rounds": 16,
         "epochs": 200,
-        "eval_every": 2,
+        "eval_every": 1,
         "patience": 10,
         "seed": 42,
         "out": None,

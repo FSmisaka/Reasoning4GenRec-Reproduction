@@ -38,7 +38,7 @@ CONFIG: Dict[str, Any] = {
         "lr": 1e-3,
         "batch_size": 128,
         "epochs": 500,
-        "eval_every": 2,
+        "eval_every": 1,
         "patience": 10,
         "seed": 42,
         "out": None,
