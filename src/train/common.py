@@ -77,8 +77,9 @@ PAPER_REF = {
 
 
 def print_comparison(model_name, category, test_metrics):
-    ref = PAPER_REF[(category, model_name)]
+    ref = PAPER_REF.get((category, model_name))
     print(f"\n===== {model_name} on {category} (test) =====")
     print(f"{'metric':<12}{'repro':>10}{'paper':>10}")
     for k in ["Recall@5", "NDCG@5", "Recall@10", "NDCG@10"]:
-        print(f"{k:<12}{test_metrics[k]:>10.4f}{ref[k]:>10.4f}")
+        paper = f"{ref[k]:>10.4f}" if ref is not None else f"{'n/a':>10}"
+        print(f"{k:<12}{test_metrics[k]:>10.4f}{paper}")

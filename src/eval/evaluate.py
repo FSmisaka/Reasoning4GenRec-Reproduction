@@ -33,6 +33,30 @@ def evaluate_sasrec(
 
 
 @torch.no_grad()
+def evaluate_caser(
+    model, split, user_index, device, k_list=(5, 10), batch_size=256, max_len=5
+):
+    model.eval()
+    ranks = []
+    for start in range(0, len(split), batch_size):
+        batch = split.targets[start : start + batch_size]
+        hist = split.histories[start : start + batch_size]
+        users = split.users[start : start + batch_size]
+        seq = _pad_histories(hist, max_len).to(device)
+        user_var = torch.tensor(
+            [[user_index.get(u, 0)] for u in users],
+            dtype=torch.long,
+            device=device,
+        )
+        scores = model.full_scores(seq, user_var)
+        _, topk = torch.topk(scores, max(k_list), dim=1)
+        topk = topk.cpu().tolist()
+        for i, tgt in enumerate(batch):
+            ranks.append(rank_of(tgt, topk[i]))
+    return rank_metrics(ranks, k_list)
+
+
+@torch.no_grad()
 def evaluate_tiger(
     model,
     split,

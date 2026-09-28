@@ -6,7 +6,8 @@ sys.path.insert(0, ".")
 
 from src.data.bundle import load_bundle
 from src.data.sid import SidTable
-from src.eval.evaluate import evaluate_sasrec
+from src.eval.evaluate import evaluate_caser, evaluate_sasrec
+from src.models.caser import Caser
 from src.models.sasrec import SASRec
 from src.models.tiger import (
     build_tiger,
@@ -14,6 +15,12 @@ from src.models.tiger import (
     encode_target,
     make_prefix_allowed_fn,
     beam_search_items,
+)
+from src.train.caser import (
+    build_batches,
+    build_instances,
+    build_seen_items,
+    build_user_index,
 )
 
 
@@ -34,6 +41,7 @@ def main():
     from src.data.bundle import Split
 
     mini = Split(
+        users=bundle.train.users[:8],
         histories=bundle.train.histories[:8],
         targets=bundle.train.targets[:8],
         hist_sids=bundle.train.hist_sids[:8],
@@ -61,6 +69,37 @@ def main():
     m = evaluate_sasrec(model, mini, device, batch_size=4)
     assert set(m) == {"Recall@5", "NDCG@5", "Recall@10", "NDCG@10"}
     print("SASRec smoke ok, loss:", round(loss.item(), 4))
+
+    user_index = build_user_index(bundle.train)
+    seen = build_seen_items(bundle.train, user_index)
+    caser = Caser(
+        num_users=len(user_index) + 1,
+        num_items=bundle.n_items + 1,
+        L=5,
+        d=16,
+        nv=2,
+        nh=4,
+    )
+    instances = build_instances(mini, user_index, 5, 1)[:8]
+    users, seq, targets, neg = next(
+        iter(
+            build_batches(
+                instances, seen, bundle.n_items, 4, 3, 16, False, device
+            )
+        )
+    )
+    prediction = caser(seq, users, torch.cat((targets, neg), 1))
+    assert prediction.shape == (4, 4)
+    pos_pred, neg_pred = torch.split(prediction, [1, 3], dim=1)
+    loss = (
+        torch.nn.functional.softplus(pos_pred).mean()
+        + torch.nn.functional.softplus(-neg_pred).mean()
+    )
+    assert torch.isfinite(loss), loss.item()
+    loss.backward()
+    m = evaluate_caser(caser, mini, user_index, device, batch_size=4, max_len=5)
+    assert set(m) == {"Recall@5", "NDCG@5", "Recall@10", "NDCG@10"}
+    print("Caser smoke ok, loss:", round(loss.item(), 4))
 
     tiger = build_tiger(sid).to(device)
     enc_list = [encode_history(h, sid) for h in mini.hist_sids]

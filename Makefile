@@ -17,7 +17,7 @@ $(info >>> 使用 GPU $(GPU))
 export CUDA_DEVICE_ORDER = PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES = $(GPU)
 
-.PHONY: games-sasrec office-sasrec games-sasrec-mini office-sasrec-mini games-tiger office-tiger smoke
+.PHONY: games-sasrec office-sasrec games-sasrec-mini office-sasrec-mini games-tiger office-tiger games-caser office-caser smoke
 
 games-sasrec:
 	DATASET=games $(PY) -m src.train.sasrec
@@ -36,6 +36,12 @@ games-tiger:
 
 office-tiger:
 	DATASET=office $(PY) -m src.train.tiger
+
+games-caser:
+	DATASET=games $(PY) -m src.train.caser
+
+office-caser:
+	DATASET=office $(PY) -m src.train.caser
 
 smoke:
 	$(PY) tests/test_smoke.py
