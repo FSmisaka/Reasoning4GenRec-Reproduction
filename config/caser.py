@@ -6,18 +6,17 @@ Sequence Embedding (Tang & Wang, WSDM 2018)
 对应模型: src/models/caser.py
 原始实现: https://github.com/graytowne/caser_pytorch
 
-CONFIG["model"] 与原始仓库 train_caser.py 的默认超参数一致:
-- L:   序列长度(原始默认 5)
-- T:   每个训练窗口的目标数(原始默认 3;本仓库数据每行只有单个
-       目标物品,故默认 1,多目标窗口由滑动窗口内部产生)
-- d:   隐向量维度(原始默认 50)
-- nv:  垂直卷积核数量(原始默认 4)
-- nh:  水平卷积核数量(原始默认 16)
-- drop/ac_conv/ac_fc: dropout 与激活函数(原始默认 0.5/relu/relu)
+卷积序列编码器(垂直/水平卷积核数量 nv/nh、隐维度 d、dropout、
+激活函数 ac_conv/ac_fc)沿用原始实现的默认值:d=50, nv=4, nh=16,
+drop=0.5, relu/relu。
 
-训练部分同样沿用原始默认: lr=1e-3, l2(weight_decay)=1e-6,
-batch_size=512, neg_samples=3(每个目标采 3 个负样本);
-损失为原始的 sigmoid 二元交叉熵,负样本从用户未见过的物品中采样。
+打分与训练协议对齐 GAMER(SeqRec.modules.model_base.seq_model.SeqModel)
+判别式基线的统一设定, 与原始 graytowne 实现的差异及原因见
+src/models/caser.py 的类 docstring:
+- 无用户嵌入(评估用户过半未在训练集出现, 个性化无法泛化);
+- 共享物品嵌入打分 + 全词表 CrossEntropy(逐物品 W2/b2 自由参数 +
+  负采样 BCE 在本数据集会坍缩为反流行度排序);
+- L=10 使用完整历史窗口(与其他模型一致, 数据集历史截断为 10)。
 
 数据集通过 DATASET 环境变量选择(见 data.categories),
 如: DATASET=games make games-caser。
@@ -32,11 +31,11 @@ CONFIG: Dict[str, Any] = {
         "categories": {
             "games": "Video_Games",
             "office": "Office_Products",
+            "industrial": "Industrial_and_Scientific",
         },
     },
     "model": {
-        "L": 5,
-        "T": 1,
+        "L": 10,
         "d": 50,
         "nv": 4,
         "nh": 16,
@@ -48,8 +47,6 @@ CONFIG: Dict[str, Any] = {
         "lr": 1e-3,
         "l2": 1e-6,
         "batch_size": 512,
-        "neg_samples": 3,
-        "neg_resample_rounds": 16,
         "epochs": 200,
         "eval_every": 1,
         "patience": 10,

@@ -3,7 +3,6 @@ import random
 import time
 
 import torch
-from torch.nn import functional as F
 
 from config import load_config
 from src.data.bundle import load_bundle
@@ -20,96 +19,23 @@ from src.train.common import (
 )
 
 
-def build_user_index(split):
-    users = sorted(set(split.users))
-    return {u: i + 1 for i, u in enumerate(users)}
-
-
-def build_seen_items(split, user_index):
-    seen = {}
-    for j in range(len(split)):
-        u = user_index[split.users[j]]
-        items = set(x + 1 for x in split.histories[j])
-        items.add(split.targets[j] + 1)
-        seen.setdefault(u, set()).update(items)
-    return seen
-
-
-def build_instances(split, user_index, L, T):
+def build_batches(split, L, batch_size, shuffle, device):
     """
-    对齐原始实现 Interactions.to_sequence / _sliding_window:
-    对每个用户的完整序列 (history + target, 物品 id +1, 0 为 padding)
-    滑动长度 L+T 的窗口, 取前 L 个为输入、后 T 个为目标;
-    序列不足一个窗口时在左侧补 0 得到单个窗口。
+    每行一个训练实例(与 GAMER 判别式基线一致):
+    输入为 history 的最后 L 个物品(左侧补 0), 目标为该行 target。
     """
-    window = L + T
-    instances = []
-    for j in range(len(split)):
-        u = user_index.get(split.users[j], 0)
-        full = [x + 1 for x in split.histories[j]] + [split.targets[j] + 1]
-        if len(full) < window:
-            windows = [[0] * (window - len(full)) + full]
-        else:
-            windows = [
-                full[i : i + window]
-                for i in range(len(full) - window + 1)
-            ]
-        for w in windows:
-            instances.append((u, w[:L], w[L:]))
-    return instances
-
-
-def sample_negatives(exclude, shape, rounds):
-    n = exclude.size(1)
-    neg = torch.randint(1, n, shape, device=exclude.device)
-    for _ in range(rounds):
-        bad = exclude.gather(1, neg)
-        if not bad.any():
-            break
-        neg = torch.where(
-            bad,
-            torch.randint(1, n, neg.shape, device=exclude.device),
-            neg,
-        )
-    return neg
-
-
-def build_batches(
-    instances,
-    seen,
-    n_items,
-    batch_size,
-    neg_samples,
-    neg_rounds,
-    shuffle,
-    device,
-):
-    indices = list(range(len(instances)))
+    indices = list(range(len(split)))
     if shuffle:
         random.shuffle(indices)
     for start in range(0, len(indices), batch_size):
         chunk = indices[start : start + batch_size]
-        B = len(chunk)
-        L = len(instances[chunk[0]][1])
-        T = len(instances[chunk[0]][2])
-        users = torch.zeros(B, 1, dtype=torch.long)
-        seq = torch.zeros(B, L, dtype=torch.long)
-        targets = torch.zeros(B, T, dtype=torch.long)
-        exclude = torch.zeros(B, n_items + 1, dtype=torch.bool)
-        for i, idx in enumerate(chunk):
-            u, s, t = instances[idx]
-            users[i, 0] = u
-            seq[i] = torch.tensor(s)
-            targets[i] = torch.tensor(t)
-            exclude[i, sorted(seen.get(u, ()))] = True
-        exclude = exclude.to(device)
-        neg = sample_negatives(exclude, (B, neg_samples), neg_rounds)
-        yield (
-            users.to(device),
-            seq.to(device),
-            targets.to(device),
-            neg,
-        )
+        seq = torch.zeros(len(chunk), L, dtype=torch.long)
+        targets = torch.zeros(len(chunk), dtype=torch.long)
+        for i, j in enumerate(chunk):
+            hist = split.histories[j][-L:]
+            seq[i, L - len(hist) :] = torch.tensor(hist) + 1
+            targets[i] = split.targets[j]
+        yield seq.to(device), targets.to(device)
 
 
 def main(cfg=None):
@@ -129,12 +55,8 @@ def main(cfg=None):
     device = pick_device()
     bundle = load_bundle(data_cfg["root"], category)
     n_items = bundle.n_items
-    user_index = build_user_index(bundle.train)
-    num_users = len(user_index) + 1
-    seen = build_seen_items(bundle.train, user_index)
     model = Caser(
-        num_users=num_users,
-        num_items=n_items + 1,
+        n_items=n_items,
         L=model_cfg["L"],
         d=model_cfg["d"],
         nv=model_cfg["nv"],
@@ -148,10 +70,6 @@ def main(cfg=None):
         lr=train_cfg["lr"],
         weight_decay=train_cfg["l2"],
     )
-    instances = build_instances(
-        bundle.train, user_index, model_cfg["L"], model_cfg["T"]
-    )
-    print(f"total training instances: {len(instances)}")
 
     out_dir = train_cfg["out"] or os.path.join("runs", f"{category}_caser")
     os.makedirs(out_dir, exist_ok=True)
@@ -165,32 +83,15 @@ def main(cfg=None):
     for epoch in range(train_cfg["epochs"]):
         model.train()
         total_loss, n_batches = 0.0, 0
-        for users, seq, targets, neg in build_batches(
-            instances,
-            seen,
-            n_items,
+        for seq, targets in build_batches(
+            bundle.train,
+            model_cfg["L"],
             train_cfg["batch_size"],
-            train_cfg["neg_samples"],
-            train_cfg["neg_resample_rounds"],
             True,
             device,
         ):
-            items_to_predict = torch.cat((targets, neg), 1)
-            items_prediction = model(seq, users, items_to_predict)
-            (
-                targets_prediction,
-                negatives_prediction,
-            ) = torch.split(
-                items_prediction,
-                [targets.size(1), neg.size(1)],
-                dim=1,
-            )
             optimizer.zero_grad()
-            # -mean(log(sigmoid(pos))) - mean(log(1 - sigmoid(neg)))
-            # 的数值稳定等价形式 (softplus)
-            loss = F.softplus(targets_prediction).mean() + F.softplus(
-                -negatives_prediction
-            ).mean()
+            loss = model.ce_loss(seq, targets)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
@@ -199,7 +100,6 @@ def main(cfg=None):
             valid_metrics = evaluate_caser(
                 model,
                 bundle.valid,
-                user_index,
                 device,
                 k_list=tuple(eval_cfg["k_list"]),
                 batch_size=eval_cfg["batch_size"],
@@ -232,7 +132,6 @@ def main(cfg=None):
     test_metrics = evaluate_caser(
         model,
         bundle.test,
-        user_index,
         device,
         k_list=tuple(eval_cfg["k_list"]),
         batch_size=eval_cfg["batch_size"],
@@ -243,7 +142,6 @@ def main(cfg=None):
             "state_dict": best_state,
             "config": run,
             "n_items": n_items,
-            "num_users": num_users,
         },
         os.path.join(out_dir, "best.pt"),
     )
@@ -253,7 +151,7 @@ def main(cfg=None):
         run,
         best_valid,
         test_metrics,
-        PAPER_REF.get((category, "Caser")),
+        PAPER_REF[(category, "Caser")],
     )
 
 

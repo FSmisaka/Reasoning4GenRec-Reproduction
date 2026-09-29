@@ -65,6 +65,10 @@ PAPER_REF = {
         "Recall@5": 0.0489, "NDCG@5": 0.0300,
         "Recall@10": 0.0763, "NDCG@10": 0.0402,
     },
+    ("Video_Games", "Caser"): {
+        "Recall@5": 0.0376, "NDCG@5": 0.0241,
+        "Recall@10": 0.0659, "NDCG@10": 0.0332,
+    },
     ("Office_Products", "SASRec"): {
         "Recall@5": 0.1019, "NDCG@5": 0.0824,
         "Recall@10": 0.1167, "NDCG@10": 0.0871,
@@ -72,6 +76,22 @@ PAPER_REF = {
     ("Office_Products", "TIGER"): {
         "Recall@5": 0.1270, "NDCG@5": 0.1037,
         "Recall@10": 0.1429, "NDCG@10": 0.1121,
+    },
+    ("Office_Products", "Caser"): {
+        "Recall@5": 0.0880, "NDCG@5": 0.0663,
+        "Recall@10": 0.1114, "NDCG@10": 0.0738,
+    },
+    ("Industrial_and_Scientific", "SASRec"): {
+        "Recall@5": 0.0807, "NDCG@5": 0.0647,
+        "Recall@10": 0.0964, "NDCG@10": 0.0697,
+    },
+    ("Industrial_and_Scientific", "TIGER"): {
+        "Recall@5": 0.1003, "NDCG@5": 0.0823,
+        "Recall@10": 0.1325, "NDCG@10": 0.0924,
+    },
+    ("Industrial_and_Scientific", "Caser"): {
+        "Recall@5": 0.0664, "NDCG@5": 0.0528,
+        "Recall@10": 0.0852, "NDCG@10": 0.0588,
     },
 }
 

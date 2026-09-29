@@ -17,6 +17,7 @@ CONFIG: Dict[str, Any] = {
         "categories": {
             "games": "Video_Games",
             "office": "Office_Products",
+            "industrial": "Industrial_and_Scientific",
         },
     },
     "model": {

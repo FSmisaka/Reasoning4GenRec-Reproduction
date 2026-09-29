@@ -16,12 +16,7 @@ from src.models.tiger import (
     make_prefix_allowed_fn,
     beam_search_items,
 )
-from src.train.caser import (
-    build_batches,
-    build_instances,
-    build_seen_items,
-    build_user_index,
-)
+from src.train.caser import build_batches
 
 
 def main():
@@ -29,6 +24,15 @@ def main():
     sid = bundle.sid_table
     assert bundle.n_items == 3858
     assert len(bundle.train) == 49133 and len(bundle.valid) == 6142
+
+    industrial = load_bundle("data/raw/Amazon", "Industrial_and_Scientific")
+    assert industrial.n_items == 3686
+    assert (
+        len(industrial.train) == 36259
+        and len(industrial.valid) == 4532
+        and len(industrial.test) == 4533
+    )
+    print("Industrial bundle ok:", industrial.n_items, "items")
 
     allowed0 = sid.allowed_codes(())
     assert len(allowed0) > 0
@@ -70,34 +74,14 @@ def main():
     assert set(m) == {"Recall@5", "NDCG@5", "Recall@10", "NDCG@10"}
     print("SASRec smoke ok, loss:", round(loss.item(), 4))
 
-    user_index = build_user_index(bundle.train)
-    seen = build_seen_items(bundle.train, user_index)
-    caser = Caser(
-        num_users=len(user_index) + 1,
-        num_items=bundle.n_items + 1,
-        L=5,
-        d=16,
-        nv=2,
-        nh=4,
+    caser = Caser(n_items=bundle.n_items, L=5, d=16, nv=2, nh=4)
+    seq, targets = next(
+        iter(build_batches(mini, 5, 4, False, device))
     )
-    instances = build_instances(mini, user_index, 5, 1)[:8]
-    users, seq, targets, neg = next(
-        iter(
-            build_batches(
-                instances, seen, bundle.n_items, 4, 3, 16, False, device
-            )
-        )
-    )
-    prediction = caser(seq, users, torch.cat((targets, neg), 1))
-    assert prediction.shape == (4, 4)
-    pos_pred, neg_pred = torch.split(prediction, [1, 3], dim=1)
-    loss = (
-        torch.nn.functional.softplus(pos_pred).mean()
-        + torch.nn.functional.softplus(-neg_pred).mean()
-    )
+    loss = caser.ce_loss(seq, targets)
     assert torch.isfinite(loss), loss.item()
     loss.backward()
-    m = evaluate_caser(caser, mini, user_index, device, batch_size=4, max_len=5)
+    m = evaluate_caser(caser, mini, device, batch_size=4, max_len=5)
     assert set(m) == {"Recall@5", "NDCG@5", "Recall@10", "NDCG@10"}
     print("Caser smoke ok, loss:", round(loss.item(), 4))
 

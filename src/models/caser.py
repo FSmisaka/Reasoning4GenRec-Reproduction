@@ -18,17 +18,24 @@ class Caser(nn.Module):
     Sequence Embedding, Jiaxi Tang and Ke Wang, WSDM '18.
     原始实现: https://github.com/graytowne/caser_pytorch (caser.py)
 
-    num_items 应为 物品数 + 1: 物品 id 从 1 开始, 0 保留给序列 padding
-    (与原始实现 to_sequence 中的 +1 偏移一致)。
-    num_users 应为 用户数 + 1: 用户 id 从 1 开始, 0 保留给
-    验证/测试中未在训练集出现过的用户。
+    卷积序列编码器(垂直/水平卷积 + 全连接层)与原始实现一致;
+    打分与损失遵循 GAMER(SeqRec.modules.model_base.seq_model.SeqModel)
+    对判别式序列基线的统一协议:
+    - 无用户嵌入: 该数据生态中过半评估用户未在训练集出现,
+      用户个性化无法泛化(GAMER 的判别式基线均为用户无关模型);
+    - 共享物品嵌入打分 z @ E^T, 不使用原始的逐物品自由参数 W2/b2:
+      本数据集每物品正样本监督仅 ~13 次, W2/b2 + 均匀负采样 BCE
+      会使热门(常为目标)物品被系统性压低, 排序坍缩为反流行度;
+    - 全词表 CrossEntropy 训练(等价于无穷负采样的对称更新)。
+
+    num_items 为物品总数, 物品 id 从 0 开始;
+    embedding 第 0 行保留给序列 padding(左侧补 0)。
     """
 
     def __init__(
         self,
-        num_users,
-        num_items,
-        L=5,
+        n_items,
+        L=10,
         d=50,
         nv=4,
         nh=16,
@@ -37,6 +44,7 @@ class Caser(nn.Module):
         ac_fc="relu",
     ):
         super().__init__()
+        self.n_items = n_items
         self.L = L
         self.d = d
         self.n_h = nh
@@ -45,9 +53,8 @@ class Caser(nn.Module):
         self.ac_conv = activation_getter[ac_conv]
         self.ac_fc = activation_getter[ac_fc]
 
-        # user and item embeddings
-        self.user_embeddings = nn.Embedding(num_users, d)
-        self.item_embeddings = nn.Embedding(num_items, d)
+        # item embedding, 0 for padding
+        self.item_embeddings = nn.Embedding(n_items + 1, d)
 
         # vertical conv layer
         self.conv_v = nn.Conv2d(1, self.n_v, (L, 1))
@@ -63,89 +70,27 @@ class Caser(nn.Module):
         self.fc1_dim_h = self.n_h * len(lengths)
         fc1_dim_in = self.fc1_dim_v + self.fc1_dim_h
         self.fc1 = nn.Linear(fc1_dim_in, d)
-        # W2, b2 are encoded with nn.Embedding, as we don't need to
-        # compute scores for all items
-        self.W2 = nn.Embedding(num_items, d + d)
-        self.b2 = nn.Embedding(num_items, 1)
 
         # dropout
         self.dropout = nn.Dropout(self.drop_ratio)
 
-        # weight initialization
-        self.user_embeddings.weight.data.normal_(
-            0, 1.0 / self.user_embeddings.embedding_dim
-        )
+        # weight initialization (同原始实现)
         self.item_embeddings.weight.data.normal_(
             0, 1.0 / self.item_embeddings.embedding_dim
         )
-        self.W2.weight.data.normal_(0, 1.0 / self.W2.embedding_dim)
-        self.b2.weight.data.zero_()
 
-    def forward(self, seq_var, user_var, item_var, for_pred=False):
+    def represent(self, seq_var):
         """
-        给定 (sequence, user, targets) 三元组计算推荐得分,
-        与原始实现的 forward 保持一致。
-
-        seq_var:   [B, L] 序列(0 为 padding)
-        user_var:  [B, 1] 用户
-        item_var:  [B, n] 待打分物品(训练时为 targets + negatives)
-        for_pred:  评估时单用户对所有物品打分
+        卷积序列编码, 与原始实现 forward 的编码部分一致,
+        返回序列表示 z: [B, d]。
         """
-
-        # Embedding Look-up
         item_embs = self.item_embeddings(seq_var).unsqueeze(1)
-        user_emb = self.user_embeddings(user_var).squeeze(1)
 
-        # Convolutional Layers
-        out, out_h, out_v = None, None, None
         # vertical conv layer
-        if self.n_v:
-            out_v = self.conv_v(item_embs)
-            out_v = out_v.view(-1, self.fc1_dim_v)
-
-        # horizontal conv layer
-        out_hs = list()
-        if self.n_h:
-            for conv in self.conv_h:
-                conv_out = self.ac_conv(conv(item_embs).squeeze(3))
-                pool_out = F.max_pool1d(conv_out, conv_out.size(2)).squeeze(2)
-                out_hs.append(pool_out)
-            out_h = torch.cat(out_hs, 1)
-
-        # Fully-connected Layers
-        out = torch.cat([out_v, out_h], 1)
-        # apply dropout
-        out = self.dropout(out)
-
-        # fully-connected layer
-        z = self.ac_fc(self.fc1(out))
-        x = torch.cat([z, user_emb], 1)
-
-        w2 = self.W2(item_var)
-        b2 = self.b2(item_var)
-
-        if for_pred:
-            w2 = w2.squeeze()
-            b2 = b2.squeeze()
-            res = (x * w2).sum(1) + b2
-        else:
-            res = torch.baddbmm(b2, w2, x.unsqueeze(2)).squeeze()
-
-        return res
-
-    def full_scores(self, seq_var, user_var):
-        """
-        一次前向计算所有物品得分(用于全量排序评估), 数学上等价于
-        原始 predict() 中对每个用户传入全部 item_ids 的做法。
-        返回 [B, num_items - 1], 第 i 列对应 0 起始的原始物品 id i
-        (embedding 第 0 槽位是 padding, 已去掉)。
-        """
-        item_embs = self.item_embeddings(seq_var).unsqueeze(1)
-        user_emb = self.user_embeddings(user_var).squeeze(1)
-
         out_v = self.conv_v(item_embs)
         out_v = out_v.view(-1, self.fc1_dim_v)
 
+        # horizontal conv layer
         out_hs = list()
         for conv in self.conv_h:
             conv_out = self.ac_conv(conv(item_embs).squeeze(3))
@@ -153,13 +98,30 @@ class Caser(nn.Module):
             out_hs.append(pool_out)
         out_h = torch.cat(out_hs, 1)
 
+        # fully-connected layer
         out = torch.cat([out_v, out_h], 1)
         out = self.dropout(out)
         z = self.ac_fc(self.fc1(out))
-        x = torch.cat([z, user_emb], 1)
+        return z
 
-        scores = (
-            torch.matmul(x, self.W2.weight.t())
-            + self.b2.weight.squeeze(-1)
+    def full_scores(self, seq_var):
+        """
+        一次前向计算所有物品得分(用于全量排序评估),
+        共享物品嵌入点积打分。返回 [B, n_items],
+        第 i 列对应物品 id i。
+        """
+        z = self.represent(seq_var)
+        emb = self.item_embeddings.weight[1:]
+        return z @ emb.t()
+
+    def ce_loss(self, seq_var, target):
+        """
+        全词表 CrossEntropy(与 GAMER SeqModel 的 CE 损失一致)。
+        target: [B] 或 [B, T], 物品 id(0 起始)。
+        """
+        z = self.represent(seq_var)
+        emb = self.item_embeddings.weight[1:]
+        logits = z @ emb.t()
+        return F.cross_entropy(
+            logits.reshape(-1, self.n_items), target.reshape(-1)
         )
-        return scores[:, 1:]
