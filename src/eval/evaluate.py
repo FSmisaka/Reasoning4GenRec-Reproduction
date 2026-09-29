@@ -51,6 +51,30 @@ def evaluate_caser(
 
 
 @torch.no_grad()
+def evaluate_gru4rec(
+    model, split, device, k_list=(5, 10), batch_size=256, max_len=10
+):
+    """GRU4Rec 按真实长度取最后隐状态, 序列右侧补 0(与训练一致)。"""
+    model.eval()
+    ranks = []
+    for start in range(0, len(split), batch_size):
+        batch = split.targets[start : start + batch_size]
+        hist = split.histories[start : start + batch_size]
+        seq = torch.zeros(len(hist), max_len, dtype=torch.long)
+        lens = torch.zeros(len(hist), dtype=torch.long)
+        for i, h in enumerate(hist):
+            h = h[-max_len:]
+            seq[i, : len(h)] = torch.tensor(h, dtype=torch.long) + 1
+            lens[i] = len(h)
+        scores = model.full_scores(seq.to(device), lens.to(device))
+        _, topk = torch.topk(scores, max(k_list), dim=1)
+        topk = topk.cpu().tolist()
+        for i, tgt in enumerate(batch):
+            ranks.append(rank_of(tgt, topk[i]))
+    return rank_metrics(ranks, k_list)
+
+
+@torch.no_grad()
 def evaluate_tiger(
     model,
     split,

@@ -47,6 +47,11 @@ make games-caser
 make office-caser
 make industrial-caser
 
+# GRU4Rec(GRU 序列推荐,RecSys'18,参考 GAMER/RecBole 实现)
+make games-gru4rec
+make office-gru4rec
+make industrial-gru4rec
+
 # 冒烟测试
 make smoke
 ```

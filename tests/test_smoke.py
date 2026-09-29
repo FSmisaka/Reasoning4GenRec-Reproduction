@@ -6,8 +6,9 @@ sys.path.insert(0, ".")
 
 from src.data.bundle import load_bundle
 from src.data.sid import SidTable
-from src.eval.evaluate import evaluate_caser, evaluate_sasrec
+from src.eval.evaluate import evaluate_caser, evaluate_gru4rec, evaluate_sasrec
 from src.models.caser import Caser
+from src.models.gru4rec import GRU4Rec
 from src.models.sasrec import SASRec
 from src.models.tiger import (
     build_tiger,
@@ -17,6 +18,7 @@ from src.models.tiger import (
     beam_search_items,
 )
 from src.train.caser import build_batches
+from src.train.gru4rec import build_batches as build_batches_gru
 
 
 def main():
@@ -84,6 +86,20 @@ def main():
     m = evaluate_caser(caser, mini, device, batch_size=4, max_len=5)
     assert set(m) == {"Recall@5", "NDCG@5", "Recall@10", "NDCG@10"}
     print("Caser smoke ok, loss:", round(loss.item(), 4))
+
+    gru = GRU4Rec(
+        n_items=bundle.n_items, embedding_size=16, hidden_size=32,
+        n_layers=1, dropout=0.3,
+    )
+    seq, lens, targets = next(
+        iter(build_batches_gru(mini, 5, 4, False, device))
+    )
+    loss = gru.ce_loss(seq, lens, targets)
+    assert torch.isfinite(loss), loss.item()
+    loss.backward()
+    m = evaluate_gru4rec(gru, mini, device, batch_size=4, max_len=5)
+    assert set(m) == {"Recall@5", "NDCG@5", "Recall@10", "NDCG@10"}
+    print("GRU4Rec smoke ok, loss:", round(loss.item(), 4))
 
     tiger = build_tiger(sid).to(device)
     enc_list = [encode_history(h, sid) for h in mini.hist_sids]

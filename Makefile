@@ -23,7 +23,7 @@ $(warning 未找到 GPU/MPS，回退到 CPU 运行（训练速度会明显变慢
 endif
 endif
 
-.PHONY: games-sasrec office-sasrec industrial-sasrec games-sasrec-mini office-sasrec-mini industrial-sasrec-mini games-tiger office-tiger industrial-tiger games-caser office-caser industrial-caser smoke
+.PHONY: games-sasrec office-sasrec industrial-sasrec games-sasrec-mini office-sasrec-mini industrial-sasrec-mini games-tiger office-tiger industrial-tiger games-caser office-caser industrial-caser games-gru4rec office-gru4rec industrial-gru4rec smoke
 
 games-sasrec:
 	DATASET=games $(PY) -m src.train.sasrec
@@ -60,6 +60,15 @@ industrial-tiger:
 
 industrial-caser:
 	DATASET=industrial $(PY) -m src.train.caser
+
+games-gru4rec:
+	DATASET=games $(PY) -m src.train.gru4rec
+
+office-gru4rec:
+	DATASET=office $(PY) -m src.train.gru4rec
+
+industrial-gru4rec:
+	DATASET=industrial $(PY) -m src.train.gru4rec
 
 smoke:
 	$(PY) tests/test_smoke.py
