@@ -23,7 +23,7 @@ $(warning 未找到 GPU/MPS，回退到 CPU 运行（训练速度会明显变慢
 endif
 endif
 
-.PHONY: games-sasrec office-sasrec industrial-sasrec games-sasrec-mini office-sasrec-mini industrial-sasrec-mini games-tiger office-tiger industrial-tiger games-caser office-caser industrial-caser games-gru4rec office-gru4rec industrial-gru4rec smoke
+.PHONY: games-sasrec office-sasrec industrial-sasrec games-sasrec-mini office-sasrec-mini industrial-sasrec-mini games-tiger office-tiger industrial-tiger games-caser office-caser industrial-caser games-gru4rec office-gru4rec industrial-gru4rec games-sidreasoner-sft office-sidreasoner-sft industrial-sidreasoner-sft games-sidreasoner-activation office-sidreasoner-activation industrial-sidreasoner-activation games-sidreasoner-rl office-sidreasoner-rl industrial-sidreasoner-rl games-sidreasoner-eval office-sidreasoner-eval industrial-sidreasoner-eval smoke
 
 games-sasrec:
 	DATASET=games $(PY) -m src.train.sasrec
@@ -69,6 +69,24 @@ office-gru4rec:
 
 industrial-gru4rec:
 	DATASET=industrial $(PY) -m src.train.gru4rec
+
+define SIDREASONER_TARGET
+$(1)-sidreasoner-$(3):
+	DATASET=$(1) bash scripts/sidreasoner/$(2).sh
+endef
+
+$(eval $(call SIDREASONER_TARGET,games,sft,sft))
+$(eval $(call SIDREASONER_TARGET,office,sft,sft))
+$(eval $(call SIDREASONER_TARGET,industrial,sft,sft))
+$(eval $(call SIDREASONER_TARGET,games,activation,activation))
+$(eval $(call SIDREASONER_TARGET,office,activation,activation))
+$(eval $(call SIDREASONER_TARGET,industrial,activation,activation))
+$(eval $(call SIDREASONER_TARGET,games,rl,rl))
+$(eval $(call SIDREASONER_TARGET,office,rl,rl))
+$(eval $(call SIDREASONER_TARGET,industrial,rl,rl))
+$(eval $(call SIDREASONER_TARGET,games,eval,eval))
+$(eval $(call SIDREASONER_TARGET,office,eval,eval))
+$(eval $(call SIDREASONER_TARGET,industrial,eval,eval))
 
 smoke:
 	$(PY) tests/test_smoke.py
