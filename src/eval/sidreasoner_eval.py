@@ -62,7 +62,7 @@ def main(cfg=None, base_model=None, test_data_path=None, result_json_data=None):
     fname = f"{category}_5_2016-10-2018-11.csv"
     info_file = os.path.join(root, "info", fname)
     if base_model is None:
-        stage = eval_cfg.get("eval_model", "stage1")
+        stage = os.environ.get("MODEL") or eval_cfg.get("eval_model", "stage1")
         if stage == "stage2":
             base_model = os.path.join(
                 "runs", "sidreasoner", f"{category}_stage2_activation",

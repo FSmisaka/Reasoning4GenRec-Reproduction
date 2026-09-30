@@ -20,7 +20,7 @@ ROOT=$(${PY} -c "from config import load_config; print(load_config('sidreasoner'
 TEST_FILE="${ROOT}/test/${CATEGORY}_5_2016-10-2018-11.csv"
 INFO_FILE="${ROOT}/info/${CATEGORY}_5_2016-10-2018-11.txt"
 
-EVAL_MODEL=$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['evaluation']['eval_model'])")
+EVAL_MODEL=${MODEL:-$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['evaluation']['eval_model'])")}
 EVAL_LABEL=$(basename "${EVAL_MODEL}")
 TEMP_DIR="./temp/sidreasoner/${CATEGORY}-${EVAL_LABEL}"
 RESULT_DIR="./results/sidreasoner"

@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
-
-PY ?= .venv/bin/python
+PIP := .venv/bin/pip
+HF := .venv/bin/huggingface-cli
 
 ifdef CUDA_VISIBLE_DEVICES
 GPU := $(CUDA_VISIBLE_DEVICES)
@@ -23,7 +23,33 @@ $(warning 未找到 GPU/MPS，回退到 CPU 运行（训练速度会明显变慢
 endif
 endif
 
-.PHONY: games-sasrec office-sasrec industrial-sasrec games-sasrec-mini office-sasrec-mini industrial-sasrec-mini games-tiger office-tiger industrial-tiger games-caser office-caser industrial-caser games-gru4rec office-gru4rec industrial-gru4rec games-sidreasoner-sft office-sidreasoner-sft industrial-sidreasoner-sft games-sidreasoner-activation office-sidreasoner-activation industrial-sidreasoner-activation games-sidreasoner-rl office-sidreasoner-rl industrial-sidreasoner-rl games-sidreasoner-eval office-sidreasoner-eval industrial-sidreasoner-eval smoke
+.PHONY: setup download-model install-vllm install-rl-env smoke \
+	games-sasrec office-sasrec industrial-sasrec \
+	games-sasrec-mini office-sasrec-mini industrial-sasrec-mini \
+	games-tiger office-tiger industrial-tiger \
+	games-caser office-caser industrial-caser \
+	games-gru4rec office-gru4rec industrial-gru4rec \
+	games-sidreasoner-sft office-sidreasoner-sft industrial-sidreasoner-sft \
+	games-sidreasoner-activation office-sidreasoner-activation industrial-sidreasoner-activation \
+	games-sidreasoner-rl office-sidreasoner-rl industrial-sidreasoner-rl \
+	games-sidreasoner-eval office-sidreasoner-eval industrial-sidreasoner-eval \
+	games-sidreasoner-think office-sidreasoner-think industrial-sidreasoner-think \
+	games-sidreasoner-metrics office-sidreasoner-metrics industrial-sidreasoner-metrics \
+	games-sidreasoner-merge office-sidreasoner-merge industrial-sidreasoner-merge \
+	games-sidreasoner-rl-data office-sidreasoner-rl-data industrial-sidreasoner-rl-data
+
+setup:
+	$(PIP) install torch --index-url https://download.pytorch.org/whl/cu124
+	$(PIP) install transformers pandas numpy pyyaml tqdm peft datasets wandb
+
+download-model:
+	env HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 hf download Qwen/Qwen3-1.7B --local-dir /thuir/wangyiyao/Qwen3-1.7B
+
+install-vllm:
+	$(PIP) install vllm
+
+install-rl-env:
+	bash scripts/sidreasoner/install_rl_env.sh
 
 games-sasrec:
 	DATASET=games $(PY) -m src.train.sasrec
@@ -70,9 +96,37 @@ office-gru4rec:
 industrial-gru4rec:
 	DATASET=industrial $(PY) -m src.train.gru4rec
 
+# SIDReasoner: 目标名 <dataset>-sidreasoner-<step>
+#   sft / activation / rl / eval  -> scripts/sidreasoner/<step>.sh
+#   think / rl-data               -> 直接调 python 模块(MODEL= 可覆盖待评模型)
+#   metrics                       -> 对最新 think 结果计算 HR@K / NDCG@K
+#   merge                         -> 合并 Stage 3 的 FSDP 分片 checkpoint
 define SIDREASONER_TARGET
 $(1)-sidreasoner-$(3):
 	DATASET=$(1) bash scripts/sidreasoner/$(2).sh
+endef
+
+define SIDREASONER_PY_TARGET
+$(1)-sidreasoner-$(3):
+	DATASET=$(1) MODEL=$$$${MODEL:-} $(PY) -m $(2)
+endef
+
+define SIDREASONER_METRICS_TARGET
+$(1)-sidreasoner-metrics:
+	@R="$$$${RESULT:-$$$$(ls -t results/sidreasoner/$(2)_think_*.json 2>/dev/null | head -n 1)}"; \
+	if [ -z "$$$${R}" ]; then \
+		echo "未找到 results/sidreasoner/$(2)_think_*.json, 先运行 make $(1)-sidreasoner-think"; \
+		exit 1; \
+	fi; \
+	echo "metrics: $$$${R}"; \
+	DATASET=$(1) $(PY) -m src.eval.sidreasoner_metrics calc --path "$$$${R}"
+endef
+
+define SIDREASONER_MERGE_TARGET
+$(1)-sidreasoner-merge:
+	CKPT_ROOT="$$$${CKPT_ROOT:-checkpoints/RecRL_Reasoning/$(2)_stage3_rl_Qwen3-1.7B}" \
+	EVAL_INTERVAL="$$$${EVAL_INTERVAL:-100}" \
+	bash scripts/sidreasoner/merge_ckpt_all.sh
 endef
 
 $(eval $(call SIDREASONER_TARGET,games,sft,sft))
@@ -87,6 +141,21 @@ $(eval $(call SIDREASONER_TARGET,industrial,rl,rl))
 $(eval $(call SIDREASONER_TARGET,games,eval,eval))
 $(eval $(call SIDREASONER_TARGET,office,eval,eval))
 $(eval $(call SIDREASONER_TARGET,industrial,eval,eval))
+
+$(eval $(call SIDREASONER_PY_TARGET,games,src.eval.sidreasoner_eval_think,think))
+$(eval $(call SIDREASONER_PY_TARGET,office,src.eval.sidreasoner_eval_think,think))
+$(eval $(call SIDREASONER_PY_TARGET,industrial,src.eval.sidreasoner_eval_think,think))
+$(eval $(call SIDREASONER_PY_TARGET,games,src.data.sidreasoner_rl_data,rl-data))
+$(eval $(call SIDREASONER_PY_TARGET,office,src.data.sidreasoner_rl_data,rl-data))
+$(eval $(call SIDREASONER_PY_TARGET,industrial,src.data.sidreasoner_rl_data,rl-data))
+
+$(eval $(call SIDREASONER_METRICS_TARGET,games,Video_Games))
+$(eval $(call SIDREASONER_METRICS_TARGET,office,Office_Products))
+$(eval $(call SIDREASONER_METRICS_TARGET,industrial,Industrial_and_Scientific))
+
+$(eval $(call SIDREASONER_MERGE_TARGET,games,Video_Games))
+$(eval $(call SIDREASONER_MERGE_TARGET,office,Office_Products))
+$(eval $(call SIDREASONER_MERGE_TARGET,industrial,Industrial_and_Scientific))
 
 smoke:
 	$(PY) tests/test_smoke.py

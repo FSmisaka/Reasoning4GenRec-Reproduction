@@ -66,7 +66,13 @@ def main(
     if test_data_path is None:
         test_data_path = os.path.join(root, "test", fname)
     if base_model is None:
-        base_model = eval_cfg["think_eval_model"]
+        base_model = os.environ.get("MODEL") or eval_cfg["think_eval_model"]
+    if not base_model:
+        raise SystemExit(
+            "未指定待评模型: 用 MODEL=<checkpoint路径> 环境变量"
+            "(如 make games-sidreasoner-think MODEL=...)或 config 的 "
+            "evaluation.think_eval_model 指定"
+        )
     if result_json_data is None:
         os.makedirs(os.path.join("results", "sidreasoner"), exist_ok=True)
         result_json_data = os.path.join(
