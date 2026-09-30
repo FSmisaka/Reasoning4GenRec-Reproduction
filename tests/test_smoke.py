@@ -70,6 +70,8 @@ def main():
     loss = model.bce_loss(seq, labels, exclude)
     assert torch.isfinite(loss), loss.item()
     loss.backward()
+    loss_bce1 = model.bce_last_loss(seq, labels, n_neg=1)
+    assert torch.isfinite(loss_bce1)
     loss_ce = model.ce_loss(seq, labels)
     assert torch.isfinite(loss_ce)
     m = evaluate_sasrec(model, mini, device, batch_size=4)
@@ -82,6 +84,8 @@ def main():
     )
     loss = caser.ce_loss(seq, targets)
     assert torch.isfinite(loss), loss.item()
+    loss_bce = caser.bce_loss(seq, targets, n_neg=3)
+    assert torch.isfinite(loss_bce), loss_bce.item()
     loss.backward()
     m = evaluate_caser(caser, mini, device, batch_size=4, max_len=5)
     assert set(m) == {"Recall@5", "NDCG@5", "Recall@10", "NDCG@10"}
@@ -96,6 +100,8 @@ def main():
     )
     loss = gru.ce_loss(seq, lens, targets)
     assert torch.isfinite(loss), loss.item()
+    loss_bce = gru.bce_loss(seq, lens, targets, n_neg=1)
+    assert torch.isfinite(loss_bce), loss_bce.item()
     loss.backward()
     m = evaluate_gru4rec(gru, mini, device, batch_size=4, max_len=5)
     assert set(m) == {"Recall@5", "NDCG@5", "Recall@10", "NDCG@10"}

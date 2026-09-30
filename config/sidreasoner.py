@@ -36,7 +36,7 @@ CONFIG: Dict[str, Any] = {
         },
     },
     "model": {
-        "base_model": "Qwen/Qwen3-1.7B",
+        "base_model": "/thuir/wangyiyao/Qwen3-1.7B",
     },
     "training": {
         "sft": {

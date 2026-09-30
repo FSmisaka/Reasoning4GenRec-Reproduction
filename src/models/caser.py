@@ -19,14 +19,16 @@ class Caser(nn.Module):
     原始实现: https://github.com/graytowne/caser_pytorch (caser.py)
 
     卷积序列编码器(垂直/水平卷积 + 全连接层)与原始实现一致;
-    打分与损失遵循 GAMER(SeqRec.modules.model_base.seq_model.SeqModel)
-    对判别式序列基线的统一协议:
-    - 无用户嵌入: 该数据生态中过半评估用户未在训练集出现,
-      用户个性化无法泛化(GAMER 的判别式基线均为用户无关模型);
-    - 共享物品嵌入打分 z @ E^T, 不使用原始的逐物品自由参数 W2/b2:
-      本数据集每物品正样本监督仅 ~13 次, W2/b2 + 均匀负采样 BCE
-      会使热门(常为目标)物品被系统性压低, 排序坍缩为反流行度;
-    - 全词表 CrossEntropy 训练(等价于无穷负采样的对称更新)。
+    打分为 GAMER(SeqRec.modules.model_base.seq_model.SeqModel)
+    判别式序列基线的共享物品嵌入点积 z @ E^T, 不使用原始的
+    逐物品自由参数 W2/b2 与用户嵌入:
+    - 该数据生态中过半评估用户未在训练集出现, 用户个性化无法泛化;
+    - 每物品正样本监督仅 ~13 次, W2/b2 自由参数 + 均匀负采样 BCE
+      会使热门物品被系统性压低, 排序坍缩为反流行度。
+    训练目标对齐 SIDReasoner(KDD'26)附录 A 的基线协议:
+    单目标 + 均匀采样负例的 Binary Cross-Entropy(bce_loss, 默认,
+    负例数 3 与原始 Caser 实现一致); 全词表 CrossEntropy
+    (ce_loss)保留供对照, 但其结果会显著高于论文报告值。
 
     num_items 为物品总数, 物品 id 从 0 开始;
     embedding 第 0 行保留给序列 padding(左侧补 0)。
@@ -125,3 +127,37 @@ class Caser(nn.Module):
         return F.cross_entropy(
             logits.reshape(-1, self.n_items), target.reshape(-1)
         )
+
+    def _sample_negatives(self, target):
+        """均匀采样与 target 不冲突的负例(MiniOneRec 惯例: 仅避开目标)。"""
+        neg = torch.randint(0, self.n_items, target.shape, device=target.device)
+        clash = neg == target
+        while clash.any():
+            neg = torch.where(
+                clash,
+                torch.randint(0, self.n_items, neg.shape, device=target.device),
+                neg,
+            )
+            clash = neg == target
+        return neg
+
+    def bce_loss(self, seq_var, target, n_neg=3):
+        """
+        单目标 Binary Cross-Entropy + n_neg 个均匀采样负例
+        (SIDReasoner 附录 A 基线协议, 负例数与原始 Caser 一致)。
+        target: [B], 物品 id(0 起始)。
+        """
+        z = self.represent(seq_var)
+        emb = self.item_embeddings.weight[1:]
+        losses = []
+        for _ in range(n_neg):
+            neg = self._sample_negatives(target)
+            pos = (z * emb[target]).sum(-1)
+            ng = (z * emb[neg]).sum(-1)
+            losses.append(
+                F.binary_cross_entropy_with_logits(pos, torch.ones_like(pos))
+            )
+            losses.append(
+                F.binary_cross_entropy_with_logits(ng, torch.zeros_like(ng))
+            )
+        return torch.stack(losses).mean()

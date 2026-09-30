@@ -13,9 +13,10 @@ CONFIG["model"] 与 GAMER 的 GRU4RecConfig 默认值一致:
 - n_layers:       1
 - dropout:        0.3
 
-打分与训练协议遵循 GAMER SeqModel 判别式基线的统一设定
-(共享物品嵌入打分 + 全词表 CrossEntropy, 无用户嵌入),
-说明见 src/models/gru4rec.py 的类 docstring。
+打分遵循 GAMER 判别式基线的共享物品嵌入协议;
+训练目标对齐 SIDReasoner(KDD'26)附录 A: 默认单目标 BCE
++ 1 个均匀负例(loss="bce"), 其结果与论文报告值接近;
+loss="ce"(全词表 CrossEntropy)会显著超出论文值, 仅供对照。
 
 数据集通过 DATASET 环境变量选择(见 data.categories),
 如: DATASET=games make games-gru4rec。
@@ -41,6 +42,9 @@ CONFIG: Dict[str, Any] = {
         "dropout": 0.3,
     },
     "training": {
+        "loss": "bce",
+        "loss_choices": ["bce", "ce"],
+        "neg_samples": 1,
         "lr": 1e-3,
         "l2": 1e-6,
         "batch_size": 512,

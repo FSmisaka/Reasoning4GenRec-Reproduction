@@ -50,6 +50,10 @@ def main(cfg=None):
         raise ValueError(
             f"loss={train_cfg['loss']!r} 无效,可选: {train_cfg['loss_choices']}"
         )
+    if train_cfg["loss"] not in train_cfg["loss_choices"]:
+        raise ValueError(
+            f"loss={train_cfg['loss']!r} 无效,可选: {train_cfg['loss_choices']}"
+        )
     category = resolve_category(data_cfg)
     run = run_config(cfg, category)
 
@@ -69,7 +73,11 @@ def main(cfg=None):
         layer_norm_eps=model_cfg["layer_norm_eps"],
         neg_resample_rounds=model_cfg["neg_resample_rounds"],
     ).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=train_cfg["lr"])
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=train_cfg["lr"],
+        weight_decay=train_cfg["l2"],
+    )
 
     out_dir = train_cfg["out"] or os.path.join(
         "runs", f"{category}_sasrec_{train_cfg['loss']}"
@@ -97,6 +105,10 @@ def main(cfg=None):
             optimizer.zero_grad()
             if train_cfg["loss"] == "bce":
                 loss = model.bce_loss(seq, labels, exclude)
+            elif train_cfg["loss"] == "bce1":
+                loss = model.bce_last_loss(
+                    seq, labels, n_neg=train_cfg["neg_samples"]
+                )
             else:
                 loss = model.ce_loss(seq, labels)
             loss.backward()

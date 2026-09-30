@@ -16,11 +16,11 @@ class GRU4Rec(nn.Module):
     物品嵌入 -> dropout -> GRU(bias=False) -> dense -> 取最后一个
     真实位置(按 seq_len - 1 gather)的隐状态作为序列表示 z。
 
-    打分与损失遵循 GAMER SeqModel 对判别式基线的统一协议
-    (与 src/models/caser.py 相同):
-    - 共享物品嵌入点积打分 z @ E^T;
-    - 全词表 CrossEntropy;
-    - 无用户嵌入。
+    打分遵循 GAMER SeqModel 判别式基线的共享物品嵌入点积
+    (z @ E^T), 训练目标对齐 SIDReasoner(KDD'26)附录 A 的基线
+    协议: 单目标 + 均匀采样负例的 Binary Cross-Entropy
+    (bce_loss, 默认); 全词表 CrossEntropy(ce_loss)保留供对照,
+    但其结果会显著高于论文报告值(见 runs/ 与 docs)。
 
     n_items 为物品总数, 物品 id 从 0 开始,
     embedding 第 0 行保留给 padding(右侧补 0, 与 GAMER 的
@@ -101,3 +101,37 @@ class GRU4Rec(nn.Module):
         emb = self.item_embeddings.weight[1:]
         logits = z @ emb.t()
         return F.cross_entropy(logits, target)
+
+    def _sample_negatives(self, target):
+        """均匀采样与 target 不冲突的负例(MiniOneRec 惯例: 仅避开目标)。"""
+        neg = torch.randint(0, self.n_items, target.shape, device=target.device)
+        clash = neg == target
+        while clash.any():
+            neg = torch.where(
+                clash,
+                torch.randint(0, self.n_items, neg.shape, device=target.device),
+                neg,
+            )
+            clash = neg == target
+        return neg
+
+    def bce_loss(self, item_seq, item_seq_len, target, n_neg=1):
+        """
+        单目标 Binary Cross-Entropy + n_neg 个均匀采样负例
+        (SIDReasoner 附录 A 基线协议)。
+        target: [B], 物品 id(0 起始)。
+        """
+        z = self.forward(item_seq, item_seq_len)
+        emb = self.item_embeddings.weight[1:]
+        losses = []
+        for _ in range(n_neg):
+            neg = self._sample_negatives(target)
+            pos = (z * emb[target]).sum(-1)
+            ng = (z * emb[neg]).sum(-1)
+            losses.append(
+                F.binary_cross_entropy_with_logits(pos, torch.ones_like(pos))
+            )
+            losses.append(
+                F.binary_cross_entropy_with_logits(ng, torch.zeros_like(ng))
+            )
+        return torch.stack(losses).mean()

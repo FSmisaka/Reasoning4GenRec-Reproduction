@@ -49,6 +49,10 @@ def main(cfg=None):
     run = run_config(cfg, category)
 
     set_seed(train_cfg["seed"])
+    if train_cfg["loss"] not in train_cfg["loss_choices"]:
+        raise ValueError(
+            f"loss={train_cfg['loss']!r} 无效,可选: {train_cfg['loss_choices']}"
+        )
     device = pick_device()
     bundle = load_bundle(data_cfg["root"], category)
     n_items = bundle.n_items
@@ -85,7 +89,12 @@ def main(cfg=None):
             device,
         ):
             optimizer.zero_grad()
-            loss = model.ce_loss(seq, lens, targets)
+            if train_cfg["loss"] == "bce":
+                loss = model.bce_loss(
+                    seq, lens, targets, n_neg=train_cfg["neg_samples"]
+                )
+            else:
+                loss = model.ce_loss(seq, lens, targets)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()

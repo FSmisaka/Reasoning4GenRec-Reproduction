@@ -10,13 +10,12 @@ Sequence Embedding (Tang & Wang, WSDM 2018)
 激活函数 ac_conv/ac_fc)沿用原始实现的默认值:d=50, nv=4, nh=16,
 drop=0.5, relu/relu。
 
-打分与训练协议对齐 GAMER(SeqRec.modules.model_base.seq_model.SeqModel)
-判别式基线的统一设定, 与原始 graytowne 实现的差异及原因见
-src/models/caser.py 的类 docstring:
-- 无用户嵌入(评估用户过半未在训练集出现, 个性化无法泛化);
-- 共享物品嵌入打分 + 全词表 CrossEntropy(逐物品 W2/b2 自由参数 +
-  负采样 BCE 在本数据集会坍缩为反流行度排序);
-- L=10 使用完整历史窗口(与其他模型一致, 数据集历史截断为 10)。
+打分为共享物品嵌入点积(GAMER 判别式基线协议, 与原始实现的
+差异及原因见 src/models/caser.py 的类 docstring);
+训练目标对齐 SIDReasoner(KDD'26)附录 A: 默认单目标 BCE
++ 3 个均匀负例(负例数与原始 Caser 实现一致), 其结果与论文
+报告值接近; loss="ce"(全词表 CrossEntropy)会显著超出论文值,
+仅供对照。L=10 使用完整历史窗口(与其他模型一致)。
 
 数据集通过 DATASET 环境变量选择(见 data.categories),
 如: DATASET=games make games-caser。
@@ -44,6 +43,9 @@ CONFIG: Dict[str, Any] = {
         "ac_fc": "relu",
     },
     "training": {
+        "loss": "bce",
+        "loss_choices": ["bce", "ce"],
+        "neg_samples": 3,
         "lr": 1e-3,
         "l2": 1e-6,
         "batch_size": 512,

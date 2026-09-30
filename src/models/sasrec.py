@@ -171,3 +171,41 @@ class SASRec(nn.Module):
             reduction="none",
         ).view(seq.size(0), -1)
         return (losses * valid).sum() / valid.sum()
+
+    def bce_last_loss(self, seq, labels, n_neg=1):
+        """
+        单目标 Binary Cross-Entropy + n_neg 个均匀采样负例, 仅在
+        最后位置监督(SIDReasoner 附录 A 基线协议 / MiniOneRec 风格;
+        区别于原版 SASRec 的全位置 bce_loss)。
+        seq/labels 均为 1 起始 id(0 为 padding)。
+        """
+        x = self.encode(seq)
+        h = x[:, -1]
+        emb = self.item_embedding.weight
+        tgt = labels[:, -1]
+        losses = []
+        for _ in range(n_neg):
+            neg = torch.randint(1, self.n_items + 1, tgt.shape, device=tgt.device)
+            clash = neg == tgt
+            while clash.any():
+                neg = torch.where(
+                    clash,
+                    torch.randint(
+                        1, self.n_items + 1, neg.shape, device=neg.device
+                    ),
+                    neg,
+                )
+                clash = neg == tgt
+            pos = (h * emb[tgt]).sum(-1)
+            ng = (h * emb[neg]).sum(-1)
+            losses.append(
+                torch.nn.functional.binary_cross_entropy_with_logits(
+                    pos, torch.ones_like(pos)
+                )
+            )
+            losses.append(
+                torch.nn.functional.binary_cross_entropy_with_logits(
+                    ng, torch.zeros_like(ng)
+                )
+            )
+        return torch.stack(losses).mean()

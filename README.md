@@ -34,7 +34,7 @@ office / industrial 把 `games` 换掉即可。
 
 ```bash
 # 0) 一次性准备
-make download-model        # Qwen3-1.7B
+make download-model        # Qwen3-1.7B; 下载后修改 config.sidreasoner 中的 model 为模型的路径
 make install-vllm          # 思考模式评估需要
 
 # 1) 三阶段训练(4 卡)
@@ -92,3 +92,16 @@ DATASET=games .venv/bin/python -m src.train.tiger
 - 训练数据已随仓库就位(`data/raw/Amazon/`), 无需下载。
 - Stage 1/2 输出在 `runs/sidreasoner/`, Stage 3 在 `checkpoints/RecRL_Reasoning/`, 评估结果在 `results/sidreasoner/`。
 - 8 种对齐任务的 prompt 模板与 GPT-4o-mini 语料增强 prompt 见 `docs/sidreasoner_prompts.md`。
+
+## 常见问题(SIDReasoner)
+
+- **无外网服务器启动即报 `Errno 97 ... huggingface.co`**: `model.base_model`
+  为 HF id 时启动会尝试联网下载。解决: 经镜像下载到本地并改 config 指向
+  本地路径(`export HF_ENDPOINT=https://hf-mirror.com` 后执行
+  `huggingface-cli download Qwen/Qwen3-1.7B --local-dir ./models/Qwen3-1.7B`,
+  再把 `model.base_model` 改为 `"./models/Qwen3-1.7B"`);
+  可再加 `export HF_HUB_OFFLINE=1` 杜绝残余联网探测。
+- **wandb 连不上**: 同因无外网。把 config 中 sft/activation 的
+  `report_to` 改为 `"none"`, 或 `export WANDB_MODE=offline`。
+- **torchrun 开头 `socket.cpp:759 Address family not supported`**:
+  本机 IPv6 探测警告, 自动回落 IPv4, 无害可忽略。
