@@ -79,8 +79,11 @@ pip install peft datasets wandb
 ```
 
 Stage 3(RL)基于官方 verl fork,推荐使用其测试过的镜像
-`hiyouga/verl:ngc-th2.6.0-cu126-vllm0.8.4-flashinfer0.2.2-cxx11abi0`,
-或参照 [verl 官方安装指南](https://verl.readthedocs.io/en/latest/start/install.html);
+`hiyouga/verl:ngc-th2.6.0-cu126-vllm0.8.4-flashinfer0.2.2-cxx11abi0`;
+若自行搭建环境,官方依赖版本配方已迁移在
+`scripts/sidreasoner/install_rl_env.sh`(torch 2.6 / vllm 0.8.5 /
+flash-attn 2.7.4 / flashinfer 0.2.2 等),或参照
+[verl 官方安装指南](https://verl.readthedocs.io/en/latest/start/install.html);
 思考模式评估另需 `vllm`。
 
 ## 模型下载(登录服务器后执行)
@@ -188,6 +191,11 @@ office / industrial 把 `games` 换成对应数据集名即可。论文参考值
 若不想从头训练, 可下载官方 checkpoint
 ([Sober-Clever/SIDReasoner-Models](https://huggingface.co/Sober-Clever/SIDReasoner-Models))
 跳过 1)-4), 直接做 5)-6)(思考模式)。
+需要按训练步评估多个 checkpoint 时, 可用批量合并工具:
+`CKPT_ROOT=checkpoints/RecRL_Reasoning/<Category>_stage3_rl_Qwen3-1.7B EVAL_INTERVAL=100 bash scripts/sidreasoner/merge_ckpt_all.sh`。
+
+8 种对齐任务的 prompt 模板与 GPT-4o-mini 语料增强 prompt
+(复现/再生语料的唯一记录)见 `docs/sidreasoner_prompts.md`。
 
 ## 评估(中间对照)
 
