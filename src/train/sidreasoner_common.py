@@ -185,6 +185,7 @@ def run_sft(
     batch_size = train_cfg["batch_size"]
     micro_batch_size = train_cfg["micro_batch_size"]
     gradient_accumulation_steps = batch_size // micro_batch_size
+    gradient_checkpointing = train_cfg.get("gradient_checkpointing", False)
     device_map = "auto"
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     ddp = world_size != 1
@@ -217,6 +218,10 @@ def run_sft(
             bf16=True,
             logging_steps=1,
             optim="adamw_torch",
+            gradient_checkpointing=gradient_checkpointing,
+            gradient_checkpointing_kwargs=(
+                {"use_reentrant": False} if gradient_checkpointing else None
+            ),
             eval_strategy="epoch",
             save_strategy="epoch",
             metric_for_best_model="eval_loss",
@@ -225,7 +230,6 @@ def run_sft(
             save_total_limit=train_cfg["save_total_limit"],
             load_best_model_at_end=True,
             ddp_find_unused_parameters=False if ddp else None,
-            group_by_length=False,
             report_to=train_cfg.get("report_to", "wandb"),
         ),
         data_collator=transformers.DataCollatorForSeq2Seq(

@@ -14,6 +14,7 @@ MASTER_PORT=${MASTER_PORT:-29519}
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 export NCCL_NET_GDR_LEVEL=0
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 exec .venv/bin/python -m torch.distributed.run \
     --nproc_per_node "${NGPUS}" --master_port "${MASTER_PORT}" \
