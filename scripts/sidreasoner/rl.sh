@@ -16,17 +16,26 @@ if [[ ! -d "${VERL_HOME}/verl" ]]; then
     exit 1
 fi
 
-read -r N_GPUS NNODES TRAIN_BS MAX_PROMPT MAX_RESP LR ROLLOUT_N KL_COEF \
+read -r NNODES TRAIN_BS MAX_PROMPT MAX_RESP LR ROLLOUT_N KL_COEF \
     EPOCHS SAVE_FREQ TEST_FREQ PROJECT USE_WANDB < <(${PY} - <<'EOF'
 from config import load_config
 rl = load_config("sidreasoner")["rl"]
-print(rl["n_gpus_per_node"], rl["nnodes"], rl["train_batch_size"],
+print(rl["nnodes"], rl["train_batch_size"],
       rl["max_prompt_length"], rl["max_response_length"], rl["lr"],
       rl["rollout_n"], rl["kl_loss_coef"], rl["total_epochs"],
       rl["save_freq"], rl["test_freq"], rl["project_name"],
       "True" if rl.get("use_wandb", True) else "False")
 EOF
 )
+
+# GPU 选择: 显式指定优先; 否则自动挑选至多 NGPUS_WANT 张空闲卡,
+# n_gpus_per_node 以实际挑选到的卡数为准
+if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  CUDA_VISIBLE_DEVICES=$(bash scripts/sidreasoner/pick_gpus.sh "${NGPUS_WANT:-4}")
+  export CUDA_VISIBLE_DEVICES
+  echo ">>> 未指定 GPU, 自动选择空闲卡: ${CUDA_VISIBLE_DEVICES}"
+fi
+N_GPUS=$(echo "${CUDA_VISIBLE_DEVICES}" | tr ',' '\n' | wc -l | tr -d ' ')
 if [[ "${USE_WANDB}" == "True" ]]; then
     LOGGER="['console','wandb']"
 else

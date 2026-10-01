@@ -10,8 +10,11 @@ PY=.venv/bin/python
 if [[ -n "${CUDA_LIST:-}" ]]; then
   CUDA_LIST_CSV=${CUDA_LIST// /,}
 else
-  CUDA_LIST=${CUDA_VISIBLE_DEVICES:-0 1}
-  CUDA_LIST=${CUDA_LIST//,/ }
+  if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+    CUDA_VISIBLE_DEVICES=$(bash scripts/sidreasoner/pick_gpus.sh "${NGPUS_WANT:-2}")
+    echo ">>> 未指定 GPU, 自动选择空闲卡: ${CUDA_VISIBLE_DEVICES}"
+  fi
+  CUDA_LIST=${CUDA_VISIBLE_DEVICES//,/ }
   CUDA_LIST_CSV=${CUDA_LIST// /,}
 fi
 

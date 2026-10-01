@@ -2,6 +2,10 @@ PY ?= .venv/bin/python
 PIP := .venv/bin/pip
 HF := .venv/bin/huggingface-cli
 
+# 用户手动指定的 GPU(为空表示未指定)。SIDReasoner 的多卡脚本
+# 据此区分: 非空则严格使用指定卡, 为空则自动挑选空闲卡。
+SIDR_GPUS := $(CUDA_VISIBLE_DEVICES)
+
 ifdef CUDA_VISIBLE_DEVICES
 GPU := $(CUDA_VISIBLE_DEVICES)
 else
@@ -103,7 +107,7 @@ industrial-gru4rec:
 #   merge                         -> 合并 Stage 3 的 FSDP 分片 checkpoint
 define SIDREASONER_TARGET
 $(1)-sidreasoner-$(3):
-	DATASET=$(1) bash scripts/sidreasoner/$(2).sh
+	DATASET=$(1) CUDA_VISIBLE_DEVICES="$(SIDR_GPUS)" bash scripts/sidreasoner/$(2).sh
 endef
 
 define SIDREASONER_PY_TARGET
