@@ -22,8 +22,13 @@ if [[ "${1:-}" == "--inner" ]]; then
     msg="[run_in_tmux] $(date '+%F %T') 内层已启动: make ${target} (pid $$)"
     echo "${msg}"; echo "${msg}" >> "${log}"   # 重定向直写文件, 不依赖 tee
     set +e
-    make "${target}" 2>&1 | tee -a "${log}"
+    # tmux 面板看原始输出(含实时进度条); 落盘日志经 awk 过滤:
+    # 丢弃 tqdm 的 \r 中间刷新, 仅保留每个进度条的最终状态与普通日志行
+    make "${target}" 2>&1 | tee >(
+        awk '{ sub(/^.*\r/, ""); print }' >> "${log}"
+    )
     code=${PIPESTATUS[0]}
+    sleep 1   # 等过滤进程写完, 避免退出码行与日志尾部交错
     msg="[run_in_tmux] $(date '+%F %T') make ${target} 退出码: ${code}"
     echo "${msg}"; echo "${msg}" >> "${log}"
     exit "${code}"
