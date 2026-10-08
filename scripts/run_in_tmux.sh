@@ -11,17 +11,21 @@
 #   离线看日志 tail -f logs/<会话名>.log
 #   结束任务   tmux kill-session -t <会话名>
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+# 本脚本位于 <repo>/scripts/ 下(一层), 回到仓库根目录
+cd "$(dirname "$0")/.."
 
 # ---- 内层: 由 tmux 在服务器会话内调起, 真正执行 make ----
 if [[ "${1:-}" == "--inner" ]]; then
     target=$2
     log=$3
-    mkdir -p "$(dirname "${log}")"
+    mkdir -p "$(dirname "${log}")" || { echo "错误: 无法创建日志目录 $(dirname "${log}")" >&2; exit 1; }
+    msg="[run_in_tmux] $(date '+%F %T') 内层已启动: make ${target} (pid $$)"
+    echo "${msg}"; echo "${msg}" >> "${log}"   # 重定向直写文件, 不依赖 tee
     set +e
     make "${target}" 2>&1 | tee -a "${log}"
     code=${PIPESTATUS[0]}
-    echo "[run_in_tmux] make ${target} 退出码: ${code}" | tee -a "${log}"
+    msg="[run_in_tmux] $(date '+%F %T') make ${target} 退出码: ${code}"
+    echo "${msg}"; echo "${msg}" >> "${log}"
     exit "${code}"
 fi
 
@@ -52,6 +56,24 @@ done
 cmd+=" bash '$(pwd)/scripts/run_in_tmux.sh' --inner '${target}' '${log}'"
 
 tmux new-session -d -s "${session}" "${cmd}"
+
+# 面板/命令退出后保留现场(不自动销毁会话), 便于事后 attach 查看报错
+tmux set-window-option -t "${session}" remain-on-exit on 2>/dev/null || true
+
+# 启动自检: 会话若在 2s 内消失, 说明内层命令根本没跑起来(常见原因:
+# ~/.tmux.conf 在此服务器上失效, 如 macOS 的 reattach-to-user-namespace)
+sleep 2
+if ! tmux has-session -t "=${session}" 2>/dev/null; then
+    echo "错误: 会话 ${session} 启动后立即退出, 内层命令未执行(日志 ${log} 也未生成)。" >&2
+    echo "排查步骤:" >&2
+    echo "  1) tmux new -d -s t1; sleep 2; tmux ls   # 空会话也秒退 -> tmux 环境问题" >&2
+    echo "  2) tmux -f /dev/null new -d -s t2; sleep 2; tmux ls   # 绕过 ~/.tmux.conf 后正常 -> 修配置" >&2
+    echo "  3) bash '$(pwd)/scripts/run_in_tmux.sh' --inner ${target} ${log}   # 前台直跑看真实报错" >&2
+    [[ -f "${log}" ]] && { echo "--- 日志尾部 ---"; tail -20 "${log}"; }
+    exit 1
+fi
+
 echo ">>> 已在 tmux 会话 '${session}' 后台启动: make ${target}"
-echo "    接回查看: tmux attach -t ${session}   (退出 attach: Ctrl-b 再按 d)"
+echo "    本终端到此为止, 不会再有训练输出(任务在后台会话中, 断开 SSH 也继续)"
+echo "    接回查看: tmux attach -t ${session}   (退出 attach: Ctrl-b 再按 d, 不停任务)"
 echo "    离线日志: tail -f ${log}"
