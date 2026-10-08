@@ -42,6 +42,11 @@ make games-sidreasoner-sft             # Stage 1: 增强式 SID-语言对齐 SFT
 make games-sidreasoner-activation      # Stage 2: 推理激活 SFT
 make games-sidreasoner-rl              # Stage 3: GRPO 强化学习(前置见下)
 
+# 三个阶段都是长任务(Stage 1 数天), 建议挂 tmux 跑(SSH 断开后服务器上继续,
+# 输出同时落盘 logs/<会话名>.log; 不指定卡则自动挑选至多 4 张空闲卡):
+make tmux TARGET=games-sidreasoner-sft SESSION=sft
+tmux attach -t sft                     # 接回实时查看; 退出查看按 Ctrl-b 再按 d
+
 # 2) 合并 Stage 3 的 FSDP 分片 checkpoint
 make games-sidreasoner-merge
 
@@ -176,6 +181,7 @@ DATASET=games SID=own     make games-sid-switch   # 切回自建 SID
 make games-sidreasoner-rl-data                          # 从当前 CSV+index 重建 RL parquet(切 SID 后自动生效, 无需手动)
 make games-sidreasoner-merge EVAL_INTERVAL=100          # 只合并特定步数间隔
 make games-sidreasoner-sft CUDA_VISIBLE_DEVICES=0,1,2,3 # 指定训练用卡(不指定则自动选空闲卡)
+make tmux TARGET=games-sidreasoner-sft  # 挂 tmux 后台跑长任务(断开 SSH 不中断; 卡自动挑选)
 make games-sidreasoner-eval CUDA_LIST="0 1"             # 指定评估用卡(默认 0 1)
 DATASET=games bash scripts/sidreasoner/sft.sh           # 等价的手动运行方式
 DATASET=games .venv/bin/python -m src.train.tiger

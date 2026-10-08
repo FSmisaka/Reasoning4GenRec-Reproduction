@@ -9,6 +9,9 @@ PIP_FLAGS := $(if $(PIP_INDEX_URL),--index-url "$(PIP_INDEX_URL)",)
 # 用户手动指定的 GPU(为空表示未指定)。SIDReasoner 的多卡脚本
 # 据此区分: 非空则严格使用指定卡, 为空则自动挑选空闲卡。
 SIDR_GPUS := $(CUDA_VISIBLE_DEVICES)
+# 仅当 CUDA_VISIBLE_DEVICES 来自 make 命令行时才向 tmux 内层转发
+# (外层 make 自动选中的单卡不算显式指定)
+CVD_CMDLINE := $(if $(filter command line,$(origin CUDA_VISIBLE_DEVICES)),$(CUDA_VISIBLE_DEVICES),)
 
 ifdef CUDA_VISIBLE_DEVICES
 GPU := $(CUDA_VISIBLE_DEVICES)
@@ -31,7 +34,7 @@ $(warning 未找到 GPU/MPS，回退到 CPU 运行（训练速度会明显变慢
 endif
 endif
 
-.PHONY: setup download-model install-vllm install-rl-env smoke \
+.PHONY: setup download-model install-vllm install-rl-env smoke tmux \
 	games-sasrec office-sasrec industrial-sasrec \
 	games-sasrec-mini office-sasrec-mini industrial-sasrec-mini \
 	games-tiger office-tiger industrial-tiger \
@@ -63,6 +66,14 @@ install-vllm:
 
 install-rl-env:
 	bash scripts/sidreasoner/install_rl_env.sh
+
+# 在 tmux 会话中后台运行其他目标(断开 SSH 后服务器上继续执行):
+#   make tmux TARGET=games-sidreasoner-sft [SESSION=sft]
+# GPU 与直接运行相同: 未显式指定时由各脚本自动挑选空闲卡
+# (外层 make 的自动选卡不转发, 避免内层误判为单卡指定)。
+tmux:
+	@test -n "$(TARGET)" || { echo "用法: make tmux TARGET=<目标> [SESSION=<会话名>]"; exit 1; }
+	CUDA_VISIBLE_DEVICES="$(CVD_CMDLINE)" bash scripts/run_in_tmux.sh "$(TARGET)" "$(SESSION)"
 
 games-sasrec:
 	DATASET=games $(PY) -m src.train.sasrec
