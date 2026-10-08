@@ -60,7 +60,7 @@ make games-sidreasoner-eval MODEL=stage2
 ## Stage 3 前置(一次性)
 
 ```bash
-git clone https://github.com/HappyPointer/SIDReasoner ../SIDReasoner   # verl fork
+git clone --depth 1 https://github.com/HappyPointer/SIDReasoner ../SIDReasoner   # verl fork
 make install-rl-env        # 或直接用官方 docker 镜像(推荐):
                            # hiyouga/verl:ngc-th2.6.0-cu126-vllm0.8.4-flashinfer0.2.2-cxx11abi0
 ```

@@ -2,6 +2,10 @@ PY ?= .venv/bin/python
 PIP := .venv/bin/pip
 HF := .venv/bin/huggingface-cli
 
+# pip 统一走清华镜像; 换源用 PIP_INDEX_URL=..., 置空恢复官方源
+PIP_INDEX_URL ?= https://pypi.tuna.tsinghua.edu.cn/simple
+PIP_FLAGS := $(if $(PIP_INDEX_URL),--index-url "$(PIP_INDEX_URL)",)
+
 # 用户手动指定的 GPU(为空表示未指定)。SIDReasoner 的多卡脚本
 # 据此区分: 非空则严格使用指定卡, 为空则自动挑选空闲卡。
 SIDR_GPUS := $(CUDA_VISIBLE_DEVICES)
@@ -48,14 +52,14 @@ endif
 	games-sid-switch office-sid-switch industrial-sid-switch
 
 setup:
-	$(PIP) install torch --index-url https://download.pytorch.org/whl/cu124
-	$(PIP) install transformers pandas numpy pyyaml tqdm peft datasets wandb
+	$(PIP) install $(PIP_FLAGS) torch
+	$(PIP) install $(PIP_FLAGS) transformers pandas numpy pyyaml tqdm peft datasets wandb
 
 download-model:
 	env HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 hf download Qwen/Qwen3-1.7B --local-dir /thuir/wangyiyao/Qwen3-1.7B
 
 install-vllm:
-	$(PIP) install vllm
+	$(PIP) install $(PIP_FLAGS) vllm
 
 install-rl-env:
 	bash scripts/sidreasoner/install_rl_env.sh
