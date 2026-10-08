@@ -46,6 +46,10 @@ make games-sidreasoner-rl              # Stage 3: GRPO 强化学习(前置见下
 # 输出同时落盘 logs/<会话名>.log; 不指定卡则自动挑选至多 4 张空闲卡):
 make tmux TARGET=games-sidreasoner-sft SESSION=sft
 tmux attach -t sft                     # 接回实时查看; 退出查看按 Ctrl-b 再按 d
+# 断线重连后找回任务:
+tmux ls                                # 1. 列出服务器上仍在跑的会话
+tmux attach -t sft                     # 2. 接回对应会话(Ctrl-b d 只退出查看, 不停任务)
+tail -f logs/sft.log                   #    不接会话也可直接读落盘日志
 
 # 2) 合并 Stage 3 的 FSDP 分片 checkpoint
 make games-sidreasoner-merge
@@ -68,6 +72,13 @@ make games-sidreasoner-eval MODEL=stage2
 git clone --depth 1 https://github.com/HappyPointer/SIDReasoner ../SIDReasoner   # verl fork
 make install-rl-env        # 或直接用官方 docker 镜像(推荐):
                            # hiyouga/verl:ngc-th2.6.0-cu126-vllm0.8.4-flashinfer0.2.2-cxx11abi0
+```
+
+网络慢导致安装耗时长时, 同样可挂 tmux 跑(断开 SSH 不中断, 上述三个变量会转发):
+
+```bash
+make tmux TARGET=install-rl-env USE_MEGATRON=0 USE_SGLANG=0   # 跳过用不到的 Megatron/sglang
+tmux attach -t r4g_install_rl_env                             # 接回查看(Ctrl-b d 退出查看)
 ```
 
 - RL 的初始策略固定为 Stage 2 输出, 脚本自动引用, 无需配置。

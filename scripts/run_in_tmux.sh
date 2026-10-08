@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # 在独立 tmux 会话中运行 make 目标, SSH 断开后服务器上继续执行。
 #
-# 用法(经 Makefile):  make tmux TARGET=games-sidreasoner-sft [SESSION=名字]
-# 直接调用:           bash scripts/run_in_tmux.sh <make-target> [会话名]
+# 用法(经 Makefile):  make tmux TARGET=<目标> [SESSION=名字] [其他变量...]
+#   例: make tmux TARGET=games-sidreasoner-sft SESSION=sft
+#       make tmux TARGET=install-rl-env USE_MEGATRON=0 USE_SGLANG=0
 #
 # 常用操作:
 #   接回查看   tmux attach -t <会话名>     (退出 attach 不影响任务: Ctrl-b 再按 d)
-#   会话列表   tmux ls
+#   会话列表   tmux ls                     (断线重连后先执行它找回会话)
 #   离线看日志 tail -f logs/<会话名>.log
 #   结束任务   tmux kill-session -t <会话名>
 set -euo pipefail
@@ -41,8 +42,9 @@ fi
 # tmux 服务端不继承当前客户端的命令行环境变量,
 # 这里显式转发本项目相关的变量到内层 make
 cmd="env"
-for v in CUDA_VISIBLE_DEVICES NGPUS_WANT MASTER_PORT DATASET VERL_HOME \
-         PY MODEL RESULT CKPT_ROOT EVAL_INTERVAL; do
+for v in CUDA_VISIBLE_DEVICES CUDA_LIST NGPUS_WANT MASTER_PORT DATASET VERL_HOME \
+         PY MODEL RESULT CKPT_ROOT EVAL_INTERVAL SID FORCE \
+         USE_MEGATRON USE_SGLANG PIP_INDEX_URL; do
     if [[ -n "${!v:-}" ]]; then
         cmd+=" ${v}=$(printf %q "${!v}")"
     fi
