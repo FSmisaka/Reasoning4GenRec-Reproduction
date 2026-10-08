@@ -40,7 +40,12 @@ endif
 	games-sidreasoner-think office-sidreasoner-think industrial-sidreasoner-think \
 	games-sidreasoner-metrics office-sidreasoner-metrics industrial-sidreasoner-metrics \
 	games-sidreasoner-merge office-sidreasoner-merge industrial-sidreasoner-merge \
-	games-sidreasoner-rl-data office-sidreasoner-rl-data industrial-sidreasoner-rl-data
+	games-sidreasoner-rl-data office-sidreasoner-rl-data industrial-sidreasoner-rl-data \
+	games-rqvae office-rqvae industrial-rqvae \
+	games-rqvae-embed office-rqvae-embed industrial-rqvae-embed \
+	games-rqvae-train office-rqvae-train industrial-rqvae-train \
+	games-rqvae-apply office-rqvae-apply industrial-rqvae-apply \
+	games-sid-switch office-sid-switch industrial-sid-switch
 
 setup:
 	$(PIP) install torch --index-url https://download.pytorch.org/whl/cu124
@@ -160,6 +165,34 @@ $(eval $(call SIDREASONER_METRICS_TARGET,industrial,Industrial_and_Scientific))
 $(eval $(call SIDREASONER_MERGE_TARGET,games,Video_Games))
 $(eval $(call SIDREASONER_MERGE_TARGET,office,Office_Products))
 $(eval $(call SIDREASONER_MERGE_TARGET,industrial,Industrial_and_Scientific))
+
+# RQ-VAE 自建 SID: 目标名 <dataset>-rqvae-<step>
+#   embed: item.json 文本 -> BGE 向量(runs/rqvae/<Category>/embeddings.npy)
+#   train: 训练 RQ-VAE -> 自建 SID 表(runs/rqvae/<Category>/index.own.json)
+#   apply: 备份官方文件后级联替换 data/raw/Amazon 下的 4 处 SID 文件
+# <dataset>-rqvae 为三步连跑。
+define RQVAE_TARGET
+$(1)-rqvae-$(3):
+	DATASET=$(1) HF_ENDPOINT=$$$${HF_ENDPOINT:-https://hf-mirror.com} $(PY) -m $(2)
+endef
+
+$(eval $(call RQVAE_TARGET,games,src.data.rqvae_embed,embed))
+$(eval $(call RQVAE_TARGET,office,src.data.rqvae_embed,embed))
+$(eval $(call RQVAE_TARGET,industrial,src.data.rqvae_embed,embed))
+$(eval $(call RQVAE_TARGET,games,src.train.rqvae,train))
+$(eval $(call RQVAE_TARGET,office,src.train.rqvae,train))
+$(eval $(call RQVAE_TARGET,industrial,src.train.rqvae,train))
+$(eval $(call RQVAE_TARGET,games,src.data.rqvae_apply,apply))
+$(eval $(call RQVAE_TARGET,office,src.data.rqvae_apply,apply))
+$(eval $(call RQVAE_TARGET,industrial,src.data.rqvae_apply,apply))
+
+games-rqvae: games-rqvae-embed games-rqvae-train games-rqvae-apply
+office-rqvae: office-rqvae-embed office-rqvae-train office-rqvae-apply
+industrial-rqvae: industrial-rqvae-embed industrial-rqvae-train industrial-rqvae-apply
+
+# SID 集切换(官方 <-> 自建), SID=official|own 必选
+games-sid-switch office-sid-switch industrial-sid-switch:
+	DATASET=$(@:-sid-switch=) SID=$${SID:?需要 SID=official|own} $(PY) -m src.data.sid_switch
 
 smoke:
 	$(PY) tests/test_smoke.py

@@ -131,6 +131,29 @@ def main():
         assert all(0 <= i < bundle.n_items for i in items)
         assert len(items) <= 10
     print("TIGER beam smoke ok, example:", ranked[0][:5])
+
+    from src.models.rqvae import RQVAE, kmeans
+
+    torch.manual_seed(0)
+    x = torch.nn.functional.normalize(torch.randn(64, 32), dim=1)
+    centers = kmeans(x, 8, iters=10)
+    assert centers.shape == (8, 32)
+    assert (torch.cdist(x, centers).argmin(dim=1).bincount(minlength=8) > 0).all()
+
+    rqvae = RQVAE(
+        input_dim=32, hidden_dims=[16], code_dim=8,
+        codebook_size=8, num_levels=3,
+    )
+    rqvae.init_codebooks(x)
+    loss, info = rqvae(x)
+    assert torch.isfinite(loss), loss.item()
+    loss.backward()
+    codes = rqvae.quantize(x)
+    assert codes.shape == (64, 3)
+    assert codes.min() >= 0 and codes.max() < 8
+    tokens = [f"<{l}_{int(c)}>" for l, c in zip("abc", codes[0])]
+    assert all(t.startswith(("<a_", "<b_", "<c_")) for t in tokens)
+    print("RQ-VAE smoke ok, loss:", round(loss.item(), 4))
     print("ALL SMOKE TESTS PASSED")
 
 
