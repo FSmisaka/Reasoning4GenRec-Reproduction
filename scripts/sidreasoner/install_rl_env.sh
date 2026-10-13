@@ -26,7 +26,13 @@ echo "2. install basic packages"
 # 无法构建, 且仅为 verl 可选工具, 训练/推理均不依赖
 # numpy 钉在 2.2.6: 同时满足 numba<2.3 / mistral-common<2.4 / opencv>=2,
 # 也避免步骤 1(vllm) 与步骤 5(opencv) 的依赖解析反复改写 numpy 版本
-"${PIP}" install "transformers[hf_xet]>=4.51.0" accelerate datasets peft hf-transfer \
+# HF 家族(transformers/tokenizers/hub/datasets/accelerate/peft)按官方
+# install_vllm_sglang_mcore.sh 的时代(2025-04, 与 vllm 0.8.5/torch 2.6
+# 配套)整族钉死: verl fork 与官方训练代码需要 transformers 4.x(5.x 移除了
+# AutoModelForVision2Seq、group_by_length 等); 必须整族同代一起装,
+# 单独降 transformers 会连锁触发 hub/datasets/accelerate 的版本错误
+"${PIP}" install "transformers[hf_xet]==4.51.3" "tokenizers==0.21.1" "huggingface-hub==0.30.2" \
+    "datasets==3.5.1" "accelerate==1.6.0" "peft==0.15.0" hf-transfer \
     "numpy==2.2.6" "pyarrow>=15.0.0" pandas \
     ray[default] codetiming hydra-core pylatexenc qwen-vl-utils wandb dill pybind11 liger-kernel mathruler \
     pytest py-spy pre-commit ruff

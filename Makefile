@@ -54,9 +54,13 @@ endif
 	games-rqvae-apply office-rqvae-apply industrial-rqvae-apply \
 	games-sid-switch office-sid-switch industrial-sid-switch
 
+# HF 家族按官方 install_vllm_sglang_mcore.sh 时代(2025-04, 与 vllm 0.8.5
+# 配套)整族钉死: 5.x 移除了 AutoModelForVision2Seq 等, 单独放宽会连锁报错
 setup:
 	$(PIP) install $(PIP_FLAGS) torch
-	$(PIP) install $(PIP_FLAGS) transformers pandas numpy pyyaml tqdm peft datasets wandb
+	$(PIP) install $(PIP_FLAGS) "transformers==4.51.3" "tokenizers==0.21.1" "huggingface-hub==0.30.2" \
+	    "datasets==3.5.1" "accelerate==1.6.0" "peft==0.15.0" \
+	    pandas numpy pyyaml tqdm wandb
 
 download-model:
 	env HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 hf download Qwen/Qwen3-1.7B --local-dir /thuir/wangyiyao/Qwen3-1.7B

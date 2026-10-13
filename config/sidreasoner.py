@@ -61,7 +61,7 @@ CONFIG: Dict[str, Any] = {
         },
         "activation": {
             "batch_size": 1024,
-            "micro_batch_size": 8,
+            "micro_batch_size": 2,
             "epochs": 5,
             "lr": 1e-5,
             "cutoff_len": 1024,

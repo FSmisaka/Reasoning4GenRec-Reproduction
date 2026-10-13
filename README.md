@@ -82,6 +82,11 @@ tmux attach -t r4g_install_rl_env                             # 接回查看(Ctr
 ```
 
 - RL 的初始策略固定为 Stage 2 输出, 脚本自动引用, 无需配置。
+- **HF 包版本已整族钉死**: `make setup` 与 `make install-rl-env` 会安装官方脚本
+  (`install_vllm_sglang_mcore.sh`, 2025-04, 与 vllm 0.8.5/torch 2.6 配套)时代的组合——
+  transformers 4.51.3 / tokenizers 0.21.1 / huggingface-hub 0.30.2 / datasets 3.5.1 /
+  accelerate 1.6.0 / peft 0.15.0。verl fork 与训练代码依赖 transformers 4.x,
+  **请勿手动升级这几个包**; 若已升级坏, 见文末常见问题。
 - verl fork 位置默认 `../SIDReasoner`, 可用 config 的 `rl.verl_home` 或 `VERL_HOME=... make games-sidreasoner-rl` 覆盖。
 - docker 镜像内运行: `PY=python3 bash scripts/sidreasoner/rl.sh`。
 - 不想用 wandb: 把 config 的 `rl.use_wandb`、`training.*.report_to` 关掉。
@@ -214,3 +219,14 @@ DATASET=games .venv/bin/python -m src.train.tiger
   `report_to` 改为 `"none"`, 或 `export WANDB_MODE=offline`。
 - **torchrun 开头 `socket.cpp:759 Address family not supported`**:
   本机 IPv6 探测警告, 自动回落 IPv4, 无害可忽略。
+- **Stage 3 报 `cannot import name 'AutoModelForVision2Seq'`(或 `TrainingArguments` 没有
+  `group_by_length` 参数)**: transformers 被依赖解析装成了 5.x, 而官方 verl fork 与训练
+  代码需要 4.x。**必须整族同代降级**(只降 transformers 会连锁触发 huggingface-hub /
+  datasets 的 `ImportError`):
+  ```bash
+  .venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+      "transformers==4.51.3" "tokenizers==0.21.1" "huggingface-hub==0.30.2" \
+      "datasets==3.5.1" "accelerate==1.6.0" "peft==0.15.0"
+  ```
+  之后用 `python -c "from transformers import AutoModelForVision2Seq; import datasets,
+  transformers, accelerate, peft, vllm; print('all ok')"` 验证。

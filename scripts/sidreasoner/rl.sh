@@ -44,7 +44,7 @@ fi
 
 CATEGORY=$(${PY} -c "from config import load_config; import os; print(load_config('sidreasoner')['data']['categories'][os.environ['DATASET']])")
 ROOT=$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['data']['root'])")
-DATA_DIR=$(${PY} -c "from config import load_config; import os; rl = load_config('sidreasoner')['rl']; print(rl['data_dir'] or None)" 2>/dev/null || true)
+DATA_DIR=$(${PY} -c "from config import load_config; rl = load_config('sidreasoner')['rl']; print(rl['data_dir'] or '')" 2>/dev/null || true)
 DATA_DIR=${DATA_DIR:-${ROOT}/rec_reasoning_verl/${CATEGORY}}
 STAGE2_CKPT="runs/sidreasoner/${CATEGORY}_stage2_activation/final_checkpoint"
 EXPERIMENT_NAME="${CATEGORY}_stage3_rl_Qwen3-1.7B"
