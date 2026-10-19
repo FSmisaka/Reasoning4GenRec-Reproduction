@@ -20,6 +20,7 @@ fi
 
 CATEGORY=$(${PY} -c "from config import load_config; import os; print(load_config('sidreasoner')['data']['categories'][os.environ['DATASET']])")
 ROOT=$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['data']['root'])")
+SID_SUFFIX=$(${PY} -c "from config import load_config; from src.data.sid_switch import sid_suffix; print(sid_suffix(load_config('sidreasoner')['data']))")
 TEST_FILE="${ROOT}/test/${CATEGORY}_5_2016-10-2018-11.csv"
 INFO_FILE="${ROOT}/info/${CATEGORY}_5_2016-10-2018-11.txt"
 
@@ -57,7 +58,7 @@ done
 ACTUAL=${ACTUAL%,}
 [[ -n "${ACTUAL}" ]] || { echo "Error: no result shards"; exit 1; }
 
-FINAL="${RESULT_DIR}/final_result_${CATEGORY}.json"
+FINAL="${RESULT_DIR}/final_result_${CATEGORY}${SID_SUFFIX}.json"
 ${PY} -m src.eval.sidreasoner_metrics merge \
     --input_path "${TEMP_DIR}" --output_path "${FINAL}" \
     --cuda_list "${ACTUAL}"

@@ -1,3 +1,4 @@
+import os
 import sys
 
 import torch
@@ -154,6 +155,21 @@ def main():
     tokens = [f"<{l}_{int(c)}>" for l, c in zip("abc", codes[0])]
     assert all(t.startswith(("<a_", "<b_", "<c_")) for t in tokens)
     print("RQ-VAE smoke ok, loss:", round(loss.item(), 4))
+
+    from src.data.sid_switch import sid_suffix
+
+    os.environ["SID_SET"] = "own"
+    assert sid_suffix() == "_own"
+    os.environ["SID_SET"] = "official"
+    assert sid_suffix() == ""
+    del os.environ["SID_SET"]
+    if os.path.isdir("data/raw_own_backup") and os.path.isdir(
+        "data/raw_official_backup"
+    ):
+        os.environ["DATASET"] = "games"
+        assert sid_suffix() in ("", "_own")
+    print("SID suffix smoke ok")
+
     print("ALL SMOKE TESTS PASSED")
 
 

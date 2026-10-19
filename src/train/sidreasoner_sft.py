@@ -131,8 +131,15 @@ def main(cfg=None):
         mask_assistant=True,
     )
 
+    # 输出目录自动带 SID 集后缀(official 无后缀, own -> *_own),
+    # 两套 SID 的产物互不覆盖; SID_SET 环境变量可强制指定
+    from src.data.sid_switch import sid_suffix
+
+    suffix = sid_suffix(data_cfg)
+    if suffix:
+        print(f"[sft] 当前 SID 集: own, 输出目录自动加后缀 {suffix}")
     out_dir = train_cfg["out"] or os.path.join(
-        "runs", "sidreasoner", f"{category}_stage1_sft"
+        "runs", "sidreasoner", f"{category}_stage1_sft{suffix}"
     )
     run_sft(
         "sft",

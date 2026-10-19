@@ -74,10 +74,13 @@ def main(
             "evaluation.think_eval_model 指定"
         )
     if result_json_data is None:
+        from src.data.sid_switch import sid_suffix
+
         os.makedirs(os.path.join("results", "sidreasoner"), exist_ok=True)
+        model_label = os.path.basename(os.path.normpath(base_model))
         result_json_data = os.path.join(
             "results", "sidreasoner",
-            f"{category}_think_{os.path.basename(os.path.normpath(base_model))}.json",
+            f"{category}_think_{model_label}{sid_suffix(data_cfg)}.json",
         )
 
     os.environ.setdefault("FLASH_ATTENTION", "1")

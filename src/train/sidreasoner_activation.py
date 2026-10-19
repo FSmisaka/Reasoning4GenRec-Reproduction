@@ -46,8 +46,14 @@ def main(cfg=None):
             root, "index", f"{category}.integrated_narrative.csv"
         ),
     }
+    # 与 Stage 1 相同的 SID 集后缀规则, 保证 base_model 与输出目录一致
+    from src.data.sid_switch import sid_suffix
+
+    suffix = sid_suffix(data_cfg)
+    if suffix:
+        print(f"[activation] 当前 SID 集: own, 路径自动加后缀 {suffix}")
     stage1_out = cfg["training"]["sft"]["out"] or os.path.join(
-        "runs", "sidreasoner", f"{category}_stage1_sft"
+        "runs", "sidreasoner", f"{category}_stage1_sft{suffix}"
     )
     base_model = train_cfg.get("base_model") or os.path.join(
         stage1_out, "final_checkpoint"
@@ -92,7 +98,7 @@ def main(cfg=None):
     )
 
     out_dir = train_cfg["out"] or os.path.join(
-        "runs", "sidreasoner", f"{category}_stage2_activation"
+        "runs", "sidreasoner", f"{category}_stage2_activation{suffix}"
     )
     run_sft(
         "activation",

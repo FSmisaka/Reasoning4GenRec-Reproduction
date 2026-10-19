@@ -152,9 +152,7 @@ endef
 
 define SIDREASONER_MERGE_TARGET
 $(1)-sidreasoner-merge:
-	CKPT_ROOT="$$$${CKPT_ROOT:-checkpoints/RecRL_Reasoning/$(2)_stage3_rl_Qwen3-1.7B}" \
-	EVAL_INTERVAL="$$$${EVAL_INTERVAL:-100}" \
-	bash scripts/sidreasoner/merge_ckpt_all.sh
+	DATASET=$(1) EVAL_INTERVAL="$$$${EVAL_INTERVAL:-100}" bash scripts/sidreasoner/merge_ckpt_all.sh
 endef
 
 $(eval $(call SIDREASONER_TARGET,games,sft,sft))

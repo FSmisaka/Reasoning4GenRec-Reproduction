@@ -185,11 +185,24 @@ DATASET=games SID=own     make games-sid-switch   # 切回自建 SID
   `data/raw_own_backup/<C>/`(自建, 切换工具自动建档并保持最新)。
 - 切换工具按 index.json 内容识别当前生效集, 切换前会把 in-place
   文件存回所属快照, 保证往返无损, 切完自动 `load_bundle` 验证。
-- **checkpoint 与 SID 绑定**: TIGER / SIDReasoner 的模型学的是特定
-  code 分配, 切换 SID 后旧 checkpoint 不可直接评估, 须按当前 SID
-  重新训练; 两套 SID 的 runs/checkpoints/results 注意用目录或命名
-  区分(Stage 1/2 输出在 `runs/sidreasoner/<C>_stage*`, 建议切换后
-  重命名归档, 如 `<C>_stage1_sft_own`)。
+- **输出自动隔离**: 训练/评估的输出目录与文件名按当前 SID 集自动
+  加后缀(official 无后缀, 与历史路径完全兼容; own -> `_own`),
+  两套 SID 的产物互不覆盖:
+
+  | 环节 | official | own |
+  |---|---|---|
+  | Stage 1/2 | `runs/sidreasoner/<C>_stage{1,2}_*/` | `runs/sidreasoner/<C>_stage{1,2}_*_own/` |
+  | Stage 3 | `checkpoints/RecRL_Reasoning/<C>_stage3_rl_Qwen3-1.7B/` | `..._Qwen3-1.7B_own/` |
+  | 非思考评估 | `results/sidreasoner/final_result_<C>.json` | `final_result_<C>_own.json` |
+  | 思考评估 | `results/sidreasoner/<C>_think_*.json` | `<C>_think_*_own.json` |
+
+  Stage 2 的 base_model、Stage 3 的初始策略、评估的 stage1/stage2
+  简写路径均按同一规则联动, 无需手工干预。
+- **SID_SET 环境变量**: 快照不齐无法自动判定时(如新机器), 用
+  `SID_SET=own|official make ...` 显式声明, 对训练/评估/merge 均生效。
+- **checkpoint 与 SID 绑定**: 切换 SID 后, 旧 SID 的 checkpoint 不可
+  直接评估, 须按当前 SID 重新训练再评估(上表的后缀机制保证两边
+  产物共存, 直接对照)。
 
 # 6. 备忘
 

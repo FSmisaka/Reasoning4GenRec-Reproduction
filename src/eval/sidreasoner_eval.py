@@ -62,15 +62,18 @@ def main(cfg=None, base_model=None, test_data_path=None, result_json_data=None):
     fname = f"{category}_5_2016-10-2018-11.csv"
     info_file = os.path.join(root, "info", fname)
     if base_model is None:
+        from src.data.sid_switch import sid_suffix
+
         stage = os.environ.get("MODEL") or eval_cfg.get("eval_model", "stage1")
+        suffix = sid_suffix(data_cfg)
         if stage == "stage2":
             base_model = os.path.join(
-                "runs", "sidreasoner", f"{category}_stage2_activation",
+                "runs", "sidreasoner", f"{category}_stage2_activation{suffix}",
                 "final_checkpoint",
             )
         elif stage == "stage1":
             base_model = os.path.join(
-                "runs", "sidreasoner", f"{category}_stage1_sft",
+                "runs", "sidreasoner", f"{category}_stage1_sft{suffix}",
                 "final_checkpoint",
             )
         else:

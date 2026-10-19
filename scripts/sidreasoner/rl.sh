@@ -63,10 +63,11 @@ fi
 
 CATEGORY=$(${PY} -c "from config import load_config; import os; print(load_config('sidreasoner')['data']['categories'][os.environ['DATASET']])")
 ROOT=$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['data']['root'])")
+SID_SUFFIX=$(${PY} -c "from config import load_config; from src.data.sid_switch import sid_suffix; print(sid_suffix(load_config('sidreasoner')['data']))")
 DATA_DIR=$(${PY} -c "from config import load_config; rl = load_config('sidreasoner')['rl']; print(rl['data_dir'] or '')" 2>/dev/null || true)
 DATA_DIR=${DATA_DIR:-${ROOT}/rec_reasoning_verl/${CATEGORY}}
-STAGE2_CKPT="runs/sidreasoner/${CATEGORY}_stage2_activation/final_checkpoint"
-EXPERIMENT_NAME="${CATEGORY}_stage3_rl_Qwen3-1.7B"
+STAGE2_CKPT="runs/sidreasoner/${CATEGORY}_stage2_activation${SID_SUFFIX}/final_checkpoint"
+EXPERIMENT_NAME="${CATEGORY}_stage3_rl_Qwen3-1.7B${SID_SUFFIX}"
 REWARD_PATH="$(pwd)/src/reward/direct_recommendation_steprule.py"
 
 export PYTHONPATH="${VERL_HOME}:${PYTHONPATH:-}"

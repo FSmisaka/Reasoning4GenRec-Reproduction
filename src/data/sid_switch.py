@@ -11,6 +11,12 @@ RL parquet), 代码与词表零耦合。两套完整快照:
 切换时先把当前 in-place 文件存回其所属快照(保持最新), 再把目标
 快照拷入 data/raw/Amazon/。
 
+新机器冷启动: 快照与 runs/rqvae 未随 data/ 同步时无法自动判定当前
+集合, 用 ASSUME=official|own 声明当前 in-place 属于哪一套(据此建档),
+如: DATASET=games ASSUME=official SID=own make games-sid-switch。
+注意目标集合的快照必须存在(own 可由 make <dataset>-rqvae 生成,
+official 无法重新生成, 只能从备份同步)。
+
 注意: 已训练的 TIGER / SIDReasoner checkpoint 与 SID 分配绑定,
 切换后需按新 SID 重新训练再评估, 否则结果无效。
 """
@@ -63,9 +69,54 @@ def detect_current(root, category, sets_dir):
     own_src = os.path.join(output_dir(category), "index.own.json")
     if os.path.exists(own_src) and _load_index(own_src) == current:
         return "own"
-    raise RuntimeError(
-        "无法判定当前 SID 集: in-place index.json 与任何快照都不一致"
+    hints = "\n".join(
+        f"  {path} -> {'存在' if os.path.exists(path) else '缺失'}"
+        for path in [
+            os.path.join(sets_dir["official"], category, f"{category}.index.json"),
+            os.path.join(sets_dir["own"], category, f"{category}.index.json"),
+            own_src,
+        ]
     )
+    raise RuntimeError(
+        "无法判定当前 SID 集: in-place index.json 与任何快照都不一致。\n"
+        "参照物状态:\n" + hints + "\n"
+        "新机器冷启动(快照/runs 未随 data 同步)时, 用 ASSUME=official|own "
+        "声明当前 in-place 是哪一套, 快照会据此自动建档, 如:\n"
+        "  DATASET=games ASSUME=official SID=own make games-sid-switch"
+    )
+
+
+def active_sid_set(data_cfg=None):
+    """返回当前生效的 SID 集: "official" / "own"。
+
+    优先读环境变量 SID_SET(冷启动无快照时用于显式声明);
+    否则用 detect_current 比对 in-place index.json 与两套快照。
+    """
+    override = os.environ.get("SID_SET")
+    if override in ("official", "own"):
+        return override
+    cfg = data_cfg or load_config("sidreasoner")["data"]
+    category = resolve_category(cfg)
+    sets_dir = {
+        "official": os.path.join("data", "raw_official_backup"),
+        "own": os.path.join("data", "raw_own_backup"),
+    }
+    try:
+        return detect_current(cfg["root"], category, sets_dir)
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"无法判定当前 SID 集, 训练/评估输出目录无法自动加后缀:\n{e}"
+        )
+
+
+def sid_suffix(data_cfg=None):
+    """当前 SID 集对应的输出路径后缀: official -> "", own -> "_own"。
+
+    用于 Stage 1/2/3 输出目录与评估结果文件名, 保证两套 SID 的
+    产物互不覆盖; official 无后缀, 与历史路径完全兼容。
+    """
+    suffix = active_sid_set(data_cfg)
+    return "" if suffix == "official" else f"_{suffix}"
 
 
 def main(cfg=None):
@@ -84,19 +135,36 @@ def main(cfg=None):
         "own": os.path.join("data", "raw_own_backup"),
     }
     in_place = _paths(root, category, suffix)
-    current = detect_current(root, category, sets_dir)
+    assume = os.environ.get("ASSUME")
+    if assume not in (None, "official", "own"):
+        raise SystemExit("ASSUME 只能是 official / own")
+    try:
+        current = detect_current(root, category, sets_dir)
+    except RuntimeError as e:
+        if assume is None:
+            raise
+        print(f"[switch] 警告: {e}")
+        print(f"[switch] 按 ASSUME={assume} 冷启动建档")
+        current = assume
     print(f"[switch] 当前 SID 集: {current}, 目标: {target}")
-    if current == target:
+    current_is_target = current == target
+    if current_is_target and os.path.exists(
+        os.path.join(sets_dir[target], category, f"{category}.index.json")
+    ):
         print(f"[switch] 已是 {target}, 无需切换")
         return
 
-    # 1) 把 in-place 存回当前集合的快照(首次 own 快照在此自动建立)
+    # 1) 把 in-place 存回当前集合的快照(首次 own 快照在此自动建立;
+    #    current==target 时仅为冷启动建档, 不发生切换)
     for src, name in in_place.items():
         if not os.path.exists(src):
             continue
         dst = os.path.join(sets_dir[current], category, name)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(src, dst)
+    if current_is_target:
+        print(f"[switch] 已是 {target}, 快照已建档, 无需切换")
+        return
 
     # 2) 目标快照 -> in-place
     missing = []
