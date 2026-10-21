@@ -48,6 +48,7 @@ endif
 	games-sidreasoner-metrics office-sidreasoner-metrics industrial-sidreasoner-metrics \
 	games-sidreasoner-merge office-sidreasoner-merge industrial-sidreasoner-merge \
 	games-sidreasoner-rl-data office-sidreasoner-rl-data industrial-sidreasoner-rl-data \
+	games-sidreasoner-chat office-sidreasoner-chat industrial-sidreasoner-chat \
 	games-rqvae office-rqvae industrial-rqvae \
 	games-rqvae-embed office-rqvae-embed industrial-rqvae-embed \
 	games-rqvae-train office-rqvae-train industrial-rqvae-train \
@@ -63,7 +64,7 @@ setup:
 	    pandas numpy pyyaml tqdm wandb
 
 download-model:
-	env HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 hf download Qwen/Qwen3-1.7B --local-dir /thuir/wangyiyao/Qwen3-1.7B
+	env HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 hf download Qwen/Qwen3-1.7B --local-dir ../Qwen3-1.7B
 
 install-vllm:
 	$(PIP) install $(PIP_FLAGS) vllm
@@ -182,6 +183,16 @@ $(eval $(call SIDREASONER_METRICS_TARGET,industrial,Industrial_and_Scientific))
 $(eval $(call SIDREASONER_MERGE_TARGET,games,Video_Games))
 $(eval $(call SIDREASONER_MERGE_TARGET,office,Office_Products))
 $(eval $(call SIDREASONER_MERGE_TARGET,industrial,Industrial_and_Scientific))
+
+# 终端把玩三阶段 checkpoint(Mac/服务器均可, checkpoint 拷贝见 README)
+define SIDREASONER_CHAT_TARGET
+$(1)-sidreasoner-chat:
+	DATASET=$(1) MODEL=$$$${MODEL:?需要 MODEL=<checkpoint路径>} $(PY) -m src.eval.sidreasoner_chat $$$${ARGS:-}
+endef
+
+$(eval $(call SIDREASONER_CHAT_TARGET,games))
+$(eval $(call SIDREASONER_CHAT_TARGET,office))
+$(eval $(call SIDREASONER_CHAT_TARGET,industrial))
 
 # RQ-VAE 自建 SID: 目标名 <dataset>-rqvae-<step>
 #   embed: item.json 文本 -> BGE 向量(runs/rqvae/<Category>/embeddings.npy)

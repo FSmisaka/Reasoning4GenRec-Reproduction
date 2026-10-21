@@ -60,7 +60,8 @@ def main(
 
     root = data_cfg["root"]
     fname = f"{category}_5_2016-10-2018-11.csv"
-    info_file = os.path.join(root, "info", fname)
+    # info 目录为 SID\ttitle\titem_id 的 .txt(与 train/test 的 .csv 不同)
+    info_file = os.path.join(root, "info", f"{category}_5_2016-10-2018-11.txt")
     item_file = os.path.join(root, "index", f"{category}.item.json")
     index_file = os.path.join(root, "index", f"{category}.index.json")
     if test_data_path is None:
@@ -90,7 +91,7 @@ def main(
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = AutoModelForCausalLM.from_pretrained(
-        base_model, dtype=torch.bfloat16, device_map="auto"
+        base_model, torch_dtype=torch.bfloat16, device_map="auto"
     )
     model.config.use_cache = True
     model.eval()

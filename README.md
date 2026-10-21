@@ -63,6 +63,38 @@ make games-sidreasoner-metrics         # 自动取最新 *_think_*.json, 可用 
 make games-sidreasoner-eval MODEL=stage2
 ```
 
+## 本地把玩三个阶段的 checkpoint(终端对话, Mac 可跑)
+
+`src/eval/sidreasoner_chat.py` 提供网页 AI 式的终端交互, 直观感受三个阶段
+各自学会了什么(Stage 1 认 SID、会翻译; Stage 2 先思考再作答但内容较套路;
+Stage 3 推理更自主、SID 更准)。三个 checkpoint 都是自包含 HF 目录(模型 +
+含 SID token 的 tokenizer), 从服务器整目录拷回即可(每个约 3.5GB);
+Stage 3 需先在服务器 `make games-sidreasoner-merge` 再拷 `actor_merged`:
+
+```bash
+# 服务器上打包
+tar czf sidreasoner_ckpt.tgz \
+  runs/sidreasoner/Video_Games_stage1_sft/final_checkpoint \
+  runs/sidreasoner/Video_Games_stage2_activation/final_checkpoint \
+  checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B/global_step_100/actor_merged
+# 拷回本地, 在仓库根目录解压(tar xzf)后:
+make games-sidreasoner-chat MODEL=runs/sidreasoner/Video_Games_stage1_sft/final_checkpoint
+```
+
+office / industrial 把 `games` 换掉即可。会话内 `/help` 查看全部命令:
+
+- **Stage 1**: 进会话先 `/think off`(它学的是空思考壳后直答), 再 `/t1`
+  `/t2` 验证 SID<->标题互译, `/t3` 观察直答 SID(无推理)。
+- **Stage 2/3**: 保持 `/think on`(默认), `/t3` 出推荐题, 观察先 `<think>`
+  推理再输出 SID; `/score <a_x><b_y><c_z>` 按论文奖励规则
+  (0.25/0.5/1.0 步进 + 0.1 格式)给上一条回答打分, `/t2` 的标准答案会
+  自动记录、随后直接 `/score` 即可。三个阶段各开一次会话玩同样的题,
+  对比就是最直观的 case 分析。
+- 默认每条输入独立单轮(贴近训练分布), `/multi on` 切多轮; `/temp 0` 贪心。
+- 纯本地只依赖 torch + transformers(无需 vllm/verl); Mac 自动用
+  MPS + float32(24GB 内存足够), 服务器上可
+  `--device cuda --dtype bfloat16` 加速。
+
 不想从头训练: 下载[官方 checkpoint](https://huggingface.co/Sober-Clever/SIDReasoner-Models)
 后跳过步骤 1)-2), 直接跑 think + metrics。
 
