@@ -117,6 +117,7 @@ CONFIG: Dict[str, Any] = {
         "num_beams": 10,
         "batch_size": 8,
         "max_new_tokens": 256,
+        "think_max_new_tokens": 256,
         "length_penalty": 0.0,
         "padding_side": "left",
         "seed": 42,

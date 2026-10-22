@@ -186,7 +186,7 @@ def main(
     from vllm import SamplingParams
 
     sampling_params = SamplingParams(
-        max_tokens=eval_cfg.get("max_new_tokens", 1024),
+        max_tokens=eval_cfg.get("think_max_new_tokens", 256),
         temperature=0.0,
         skip_special_tokens=False,
     )
@@ -245,8 +245,9 @@ def main(
     )
     with torch.no_grad():
         outputs = llm.generate(prompts, sampling_params)
-    cots = [cot.outputs[0].text.strip() for cot in outputs]
-    cots = [cot[: cot.find("</think>")].strip() for cot in cots]
+    raw_cots = [cot.outputs[0].text.strip() for cot in outputs]
+    close_found = ["</think>" in c for c in raw_cots]
+    cots = [c[: c.find("</think>")].strip() for c in raw_cots]
     prompt_cot = [
         prompt + cot.outputs[0].text.strip()
         for prompt, cot in zip(prompts, outputs)
@@ -286,6 +287,10 @@ def main(
         test["prompt_cot"] = prompt_cot[i]
         test["predict"] = outputs[i]
         test["cot"] = cots[i]
+        test["cot_len"] = len(
+            tokenizer(cots[i], add_special_tokens=False)["input_ids"]
+        )
+        test["close_found"] = close_found[i]
     for i in range(len(test_data)):
         if "dedup" in test_data[i]:
             test_data[i].pop("dedup")
