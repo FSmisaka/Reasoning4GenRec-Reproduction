@@ -6,6 +6,14 @@ SIDReasoner 终端把玩入口(Mac MPS / CPU / 服务器 GPU 均可)
 - Stage 2: /think on 先 <think> 推理再答 SID(教师腔, 内容较套路)
 - Stage 3: 同格式, 推理更自主、SID 更准(/score 按论文规则逐级打分)
 
+推荐任务(/t3 及 /sys rec 下的自由输入)默认走"评测复刻"解码, 与
+make *-sidreasoner-eval / *-sidreasoner-think 等价:
+- /think off: 空思考块硬拼进 token 序列 + trie 约束束搜索
+  (每步只允许合法 SID 前缀的下一 token, 思维链在解码层面不可能出现)
+- /think on : 先自由贪心生成思维链, 截断到 </think> 拼回 prompt,
+  再做同样的约束束搜索(对应思考评测的两阶段)
+/constrain off 可退回旧的自由生成模式。
+
 启动(checkpoint 目录需就位, 拷贝方法见 README 本地把玩一节):
   DATASET=games MODEL=<checkpoint路径> .venv/bin/python -m src.eval.sidreasoner_chat
   make games-sidreasoner-chat MODEL=<checkpoint路径>   # 等价
@@ -38,18 +46,31 @@ SID_SYSTEM = (
     "that provides further context. Write a response that appropriately "
     "completes the request. \nAnswer the question about item identification."
 )
+# 非思考评测(EvalSidDataset)的 system, 逐字迁移(含 "request. " 后的空格)
+PRED_SYSTEM = (
+    "Below is an instruction that describes a task, paired with an input "
+    "that provides further context. Write a response that appropriately "
+    "completes the request. \nCan you predict the next possible item that "
+    "the user may expect?\n"
+)
 
 HELP = """\
 命令(直接输入文本则作为 user 消息发给模型):
-  /t1             随机真实商品: 问 SID -> 标题(验证 Stage 1 翻译能力)
+  /t1             随机真实商品: 问 SID -> 标题(自由生成, 验证 Stage 1 翻译)
   /t2             随机真实商品: 问标题 -> SID(标准答案自动记录, 之后可 /score)
-  /t3 [s1,s2,...] 推荐任务: 给定(缺省随机)SID 历史 -> 思考后输出 SID
-  /score [SID]    按论文规则给上一条回答打分(0.25/0.5/1.0 步进 + 0.1 格式)
+  /t3 [s1,s2,...] 推荐任务: 给定(缺省随机)SID 历史 -> 评测复刻解码输出 top-N SID
+  /score [SID]    按论文规则给上一条回答打分; top-N 输出时报命中排名
   /sid [n]        随机展示 n 条真实 SID 与标题(自己出题用)
-  /think on|off   思考模式开关(Stage 1 建议 off, Stage 2/3 保持 on)
-  /sys rec|id     自由输入的 system 提示: 推荐任务(rec, 默认)/物品识别(id)
+  /think on|off   评测复刻模式的两档: off=空思考块+约束束搜索直答 SID
+                  (思维链被解码器禁止); on=自由思维链 -> </think> -> 约束束搜索
+  /constrain on|off  评测复刻解码开关(默认 on; off 退回自由生成,
+                     此时 /think off 不再能强制阻断思维链)
+  /beams N        束宽(默认取 config evaluation.num_beams=10, 与评测一致)
+  /sys rec|id|pred 自由输入的 system 提示: rec=Stage2/3 训练与思考评测,
+                  pred=非思考评测(Case 5 措辞, 配合手动输入其 user 模板),
+                  两者均走评测复刻解码; id=物品识别(自由生成)
   /multi on|off   多轮对话开关(默认 off: 每条输入独立单轮, 贴近训练分布)
-  /temp T         采样温度(0 = 贪心; 默认 0.6)
+  /temp T         自由生成的采样温度(0 = 贪心; 评测复刻路径恒为贪心)
   /reset          清空多轮历史
   /help /exit
 """
@@ -80,6 +101,56 @@ def load_info_items(path):
             if len(parts) >= 2 and len(extract_sid_tokens(parts[0])) == 3:
                 items.append((parts[0].strip(), parts[1].strip()))
     return items
+
+
+def get_hash(x):
+    x = [str(_) for _ in x]
+    return "-".join(x)
+
+
+def find_last_sublist(lst, sub):
+    if not sub:
+        return None
+    n, m = len(lst), len(sub)
+    for start in range(n - m, -1, -1):
+        if lst[start : start + m] == sub:
+            return start
+    return None
+
+
+def build_sid_trie(tokenizer, info_path):
+    """trie 约束(迁移自 sidreasoner_eval(_think).py):
+    对 "</think>\\n\\n" 之后已生成的 token 序列, 建立合法下一 token 的前缀树。"""
+    prefix_prompt = "</think>\n\n"
+    with open(info_path, "r", encoding="utf-8") as f:
+        semantic_ids = [line.split("\t")[0].strip() for line in f]
+    sep_ids = tokenizer(prefix_prompt, add_special_tokens=False)["input_ids"]
+    prefix_index = len(sep_ids)
+    eos = tokenizer.eos_token_id
+    hash_dict = {}
+    for sid in semantic_ids:
+        ID = tokenizer(f"{prefix_prompt}{sid}\n").input_ids + [eos]
+        for i in range(prefix_index, len(ID)):
+            if i == prefix_index:
+                key = get_hash(ID[:i])
+            else:
+                key = get_hash(ID[prefix_index:i])
+            hash_dict.setdefault(key, set()).add(ID[i])
+    return {k: list(v) for k, v in hash_dict.items()}, sep_ids
+
+
+def load_eval_cfg():
+    defaults = {"num_beams": 10, "max_new_tokens": 256, "length_penalty": 0.0}
+    try:
+        from config import load_config
+
+        evaluation = load_config("sidreasoner")["evaluation"]
+        defaults.update(
+            {k: evaluation[k] for k in defaults if k in evaluation}
+        )
+    except Exception:
+        pass
+    return defaults
 
 
 class Session:
@@ -119,6 +190,16 @@ class Session:
         self.history = []
         self.last_reply = None
         self.last_gt = None
+        self.last_reply_list = None
+        self.eval_cfg = load_eval_cfg()
+        self.constrain = True
+        self.trie = None
+        self.sep_ids = None
+        self.sid2title = {}
+        self.model.config.pad_token_id = self.tokenizer.eos_token_id
+        if hasattr(self.model, "generation_config"):
+            for k in ("temperature", "top_p"):
+                setattr(self.model.generation_config, k, None)
 
     def generate(self, messages):
         text = self.tokenizer.apply_chat_template(
@@ -170,6 +251,7 @@ class Session:
             f"[{n_new} tokens, {dt:.1f}s, {n_new / max(dt, 1e-6):.1f} tok/s]"
         )
         self.last_reply = reply
+        self.last_reply_list = None
         return reply
 
     def send(self, user_text, system=None):
@@ -182,16 +264,155 @@ class Session:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_text},
             ]
-        reply = self.generate(messages)
+        if self.constrain and self.trie is not None and system != SID_SYSTEM:
+            reply = self.send_eval(messages)
+        else:
+            reply = self.generate(messages)
         if self.multi:
             self.history = messages + [{"role": "assistant", "content": reply}]
         return reply
+
+    def setup_eval(self, info_path, items):
+        """构建评测复刻所需的 trie 约束与 SID->标题表。"""
+        self.sid2title = {sid: title for sid, title in items}
+        self.trie, self.sep_ids = build_sid_trie(self.tokenizer, info_path)
+        print(
+            f"eval 复刻就绪: trie 约束({len(self.sid2title)} 条 SID, "
+            f"num_beams={self.eval_cfg['num_beams']})"
+        )
+
+    def _prefix_allowed_tokens(self, batch_id, input_ids):
+        """约束回调(迁移自 sidreasoner_eval.py): 只允许延续合法 SID
+        前缀的 token, 其余 token 在每一步解码时被屏蔽。"""
+        ids = input_ids.tolist()
+        pos = find_last_sublist(ids, self.sep_ids)
+        if pos is None:
+            return [self.tokenizer.eos_token_id]
+        after = ids[pos + len(self.sep_ids) :]
+        key = get_hash(after) if after else get_hash(self.sep_ids)
+        return self.trie.get(key, [self.tokenizer.eos_token_id])
+
+    def beam_search_sids(self, prompt_ids):
+        input_ids = torch.tensor([prompt_ids], device=self.device)
+        attention_mask = torch.ones_like(input_ids)
+        t0 = time.time()
+        with torch.no_grad():
+            gen = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=self.eval_cfg["max_new_tokens"],
+                num_beams=self.eval_cfg["num_beams"],
+                num_return_sequences=self.eval_cfg["num_beams"],
+                early_stopping=True,
+                length_penalty=self.eval_cfg["length_penalty"],
+                prefix_allowed_tokens_fn=self._prefix_allowed_tokens,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+        outs = self.tokenizer.batch_decode(
+            gen[:, input_ids.shape[1] :], skip_special_tokens=True
+        )
+        outs = [o.split("Response:\n")[-1].strip() for o in outs]
+        return outs, time.time() - t0
+
+    def send_eval(self, messages):
+        """评测复刻路径(与 make *-sidreasoner-eval / -think 等价的解码):
+        - /think off: "<think>\\n</think>\\n\\n" 硬拼进 token 序列后直接束搜索
+          (对应非思考评测, 思维链不可能出现)
+        - /think on : 自由贪心生链 -> 截到 </think> 拼回 -> 束搜索 SID
+          (对应思考评测的两阶段)
+        """
+        base_ids = self.tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=True
+        )
+        base_text = self.tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=False
+        )
+        if self.think:
+            print("— 自由思维链(贪心, 对应 think 评测第一阶段)— ")
+            from transformers import TextIteratorStreamer
+
+            streamer = TextIteratorStreamer(
+                self.tokenizer, skip_prompt=True, skip_special_tokens=False
+            )
+            enc = torch.tensor([base_ids], device=self.device)
+            thread = threading.Thread(
+                target=self.model.generate,
+                kwargs=dict(
+                    input_ids=enc,
+                    attention_mask=torch.ones_like(enc),
+                    max_new_tokens=self.eval_cfg["max_new_tokens"],
+                    do_sample=False,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    streamer=streamer,
+                ),
+            )
+            thread.start()
+            chunks = []
+            for chunk in streamer:
+                chunks.append(chunk)
+                print(chunk, end="", flush=True)
+            thread.join()
+            print()
+            # 与 sidreasoner_eval_think.py 一致: 拼回后截到 </think>
+            # (无 </think> 时丢末字符再强制闭合, 保留官方行为)
+            text = base_text + "".join(chunks).strip()
+            idx = text.find("</think>")
+            text = (text[:idx] if idx != -1 else text[:-1]).strip()
+            text += "\n</think>\n\n"
+            prompt_ids = self.tokenizer(
+                text, truncation=True, max_length=2560
+            )["input_ids"]
+        else:
+            prompt_ids = list(base_ids) + self.tokenizer.encode(
+                "<think>\n</think>\n\n"
+            )
+        print(
+            f"— trie 约束束搜索(num_beams={self.eval_cfg['num_beams']}, "
+            "贪心确定性)— "
+        )
+        outs, dt = self.beam_search_sids(prompt_ids)
+        for rank, sid in enumerate(outs, 1):
+            print(f"  {rank:>2}. {sid}  {self.sid2title.get(sid, '')}")
+        print(f"[束搜索 {dt:.1f}s]")
+        self.last_reply = outs[0] if outs else ""
+        self.last_reply_list = outs
+        return self.last_reply
 
     def score(self, gt_sid, prefix_map):
         if not self.last_reply:
             print("还没有生成过回答, 先发一条消息或 /t1 /t2 /t3")
             return
         gt = extract_sid_tokens(gt_sid)[:3]
+        if self.last_reply_list:
+            # 评测复刻的 top-N 输出: 报 top-1 步进分 + 命中排名(同 HR@K 口径)
+            top1 = extract_sid_tokens(self.last_reply_list[0])[:3]
+            rank = next(
+                (
+                    i
+                    for i, sid in enumerate(self.last_reply_list, 1)
+                    if extract_sid_tokens(sid)[:3] == gt
+                ),
+                None,
+            )
+            parts = []
+            if len(top1) == 3:
+                step = calculate_reward(top1, gt)
+                parts.append(f"top-1 {top1} 步进分 {step:.2f}")
+                if prefix_map is not None:
+                    fmt = 0.1 * float(calculate_format_reward(top1, prefix_map))
+                    parts.append(f"格式分 {fmt:.2f}")
+            else:
+                parts.append(f"top-1 无法解析: {self.last_reply_list[0]!r}")
+            if rank is not None:
+                parts.append(
+                    f"标准 {gt} 命中排名 {rank}/{len(self.last_reply_list)}"
+                )
+            else:
+                parts.append(
+                    f"标准 {gt} 未进 top-{len(self.last_reply_list)}"
+                )
+            print("; ".join(parts))
+            return
         tail = self.last_reply.rsplit("</think>", 1)[-1]
         ans = extract_sid_tokens(tail)[:3]
         if len(ans) < 3 or len(gt) < 3:
@@ -287,12 +508,18 @@ def main():
         )
 
         prefix_map = construct_prefix_allowed_hashmap(info_path)
+        try:
+            session.setup_eval(info_path, items)
+        except Exception as e:
+            print(f"eval 复刻初始化失败, 退回自由生成: {e}")
 
     print(
         f"模型 {args.model}\n设备 {session.device} | dtype {session.dtype} | "
         f"思考 {'on' if session.think else 'off'} | "
         f"{'多轮' if session.multi else '单轮(每条独立)'} | "
-        f"temp {session.temperature}\n数据集 "
+        f"temp {session.temperature} | 评测复刻"
+        f"{'开' if (session.constrain and session.trie) else '关'}"
+        f"(beams={session.eval_cfg['num_beams']})\n数据集 "
         f"{os.environ.get('DATASET', '未设(示例题目与格式检查不可用)')}"
     )
     print(HELP)
@@ -325,14 +552,29 @@ def main():
                     print(f"思考模式 {rest}")
                 else:
                     print("用法: /think on|off")
+            elif cmd == "/constrain":
+                if rest in ("on", "off"):
+                    session.constrain = rest == "on"
+                    note = "" if session.trie else "(trie 未就绪, 实际不生效)"
+                    print(f"评测复刻解码 {rest}{note}")
+                else:
+                    print("用法: /constrain on|off")
+            elif cmd == "/beams":
+                if rest.isdigit() and int(rest) > 0:
+                    session.eval_cfg["num_beams"] = int(rest)
+                    print(f"束宽 {rest}")
+                else:
+                    print("用法: /beams N (正整数)")
             elif cmd == "/sys":
-                if rest in ("rec", "id"):
-                    session.default_system = (
-                        REC_SYSTEM if rest == "rec" else SID_SYSTEM
-                    )
+                if rest in ("rec", "id", "pred"):
+                    session.default_system = {
+                        "rec": REC_SYSTEM,
+                        "id": SID_SYSTEM,
+                        "pred": PRED_SYSTEM,
+                    }[rest]
                     print(f"自由输入 system 提示: {rest}")
                 else:
-                    print("用法: /sys rec|id (rec=推荐任务, id=物品识别)")
+                    print("用法: /sys rec|id|pred")
             elif cmd == "/multi":
                 if rest in ("on", "off"):
                     session.multi = rest == "on"
