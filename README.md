@@ -7,9 +7,16 @@
 # 1. 环境
 
 ```bash
+# faster
 source /thuir/wangyiyao/miniconda3/etc/profile.d/conda.sh
 conda create -p /thuir/wangyiyao/conda_envs/r4gr python=3.11
 conda activate /thuir/wangyiyao/conda_envs/r4gr
+
+# 112.111.7.80
+source /data/jiangchumeng/miniconda3/etc/profile.d/conda.sh
+conda create -p /data/jiangchumeng/conda_envs/r4gr
+conda activate /data/jiangchumeng/conda_envs/r4gr
+
 python3 -m venv .venv && source .venv/bin/activate
 make setup
 ```
@@ -236,7 +243,73 @@ DATASET=games SID=own     make games-sid-switch   # 切回自建 SID
   直接评估, 须按当前 SID 重新训练再评估(上表的后缀机制保证两边
   产物共存, 直接对照)。
 
-# 6. 备忘
+# 6. 思维链多样性分析(SIDReasoner)
+
+观察"不同用户的思维链高度雷同"这一多样性问题, 对三个对象做统计对比:
+**teacher**(Stage 2 训练数据中教师模型的思维链)、**stage2** / **stage3**
+(对应阶段模型在测试集上输出的思维链)。两个阶段, 产物均在
+`results/diversity/<Category>/`(语料 `corpora/*.jsonl` + `analysis.json`
++ `report.md`):
+
+```bash
+# ① 采集语料(默认 teacher + 本地 stage2 checkpoint; MPS/CUDA 均可,
+#    复刻 think 评测的 prompt, 贪心生成到 </think>, 无需 vllm)
+make games-diversity-collect NUM=300
+#    stage3 两种方式: 本地生成或导入服务器 think 结果(含全部三个对象)
+MODEL_SPECS="stage3=<stage3 checkpoint 路径>" make games-diversity-collect
+IMPORT_SPECS="stage3=results/sidreasoner/Video_Games_think_xxx.json" \
+    FORCE=1 make games-diversity-collect
+
+# ② 统计报告: TF-IDF 词频 / bigram 频率 / TTR 与 distinct-n / 熵 /
+#    完全重复率 / 成对 TF-IDF 余弦与 3-gram Jaccard / 首句模板集中度 /
+#    gzip 压缩率 / 最相似样本对示例; text 与 raw(含 SID)双视角
+make games-diversity-report
+```
+
+- 同一 `NUM`/`SEED` 下各模型的测试用户采样一致, stage2/stage3 可比;
+  生成预算默认 512 token(`MAX_NEW_TOKENS=256` 对齐官方 think 评测)。
+- 复跑换参数: `FORCE=1 NUM=500 make games-diversity-collect`。
+
+## 服务器全量分析(复用已算好的 think JSON, 无需 GPU/vllm)
+
+若服务器上已跑过思考评测, 直接导入其结果做全量统计(think JSON 的
+`cot` 字段即思维链; teacher 从 CSV 取全部约 4.9 万行):
+
+```bash
+# ① 采集: 全量 teacher + 导入 stage2/stage3 的 think 结果
+DATASET=games .venv/bin/python -m src.analysis.collect_diversity_corpora \
+    --teacher --num -1 --force \
+    --import stage2=results/sidreasoner/Video_Games_think_stage2.json \
+    --import stage3=results/sidreasoner/Video_Games_think_stage3_step1900.json
+# 或经 make: IMPORT_SPECS="stage2=results/sidreasoner/Video_Games_think_stage2.json,stage3=results/sidreasoner/Video_Games_think_stage3_step1900.json" \
+#   TEACHER=1 NUM=-1 FORCE=1 make games-diversity-collect
+
+# ② 全量统计报告(--full = 不截采样文档; 成对指标仍受 PAIR_CAP 限制,
+#    全量语料每语料约 15s + 内存 ~1.6GB, PAIR_CAP=2000 时 Jaccard 约再 +1min)
+DATASET=games .venv/bin/python -m src.analysis.diversity_report \
+    --full --pair-cap 2000
+# 或: FULL=1 PAIR_CAP=2000 make games-diversity-report
+```
+
+- **等量化(默认开)**: teacher 全量(4.9 万)与 think 结果(6142)规模不同,
+  而 TTR/distinct/熵/gzip 等语料级指标随语料变大单调走低, 直接对比会
+  失真。报告默认把所有语料按 seed 采样到与最小语料相同的篇数
+  (各语料的采集总量/统计量分别记录在其小节与 `analysis.json` 的
+  `meta.n_docs_collected/n_docs_analyzed`);`--no-equalize` 可关闭。
+- 导入的语料 `user_id` 为 `#行号`(官方 think JSON 不含该字段)。
+- 全量数值与采样 300 的数值不可直接对调着比(语料级指标依赖规模),
+  对比请始终在同一份 report 内进行。
+
+- games 上的初步结论(300 条, seed 42, 三语料同测试用户): stage2 相对
+  teacher, TTR 减半(0.024 vs 0.045)、distinct-2 减半(0.139 vs 0.296)、
+  成对余弦均值 +50%(0.285 vs 0.189)、gzip 率更低、首句模板 Top5 覆盖
+  4 倍(6.7% vs 1.7%), 且出现逐字相同的输出(完全重复率 0.7%)——
+  SFT 后模型输出显著比教师数据更同质; stage3(GRPO 后)各项词汇多样性
+  指标与 stage2 几乎持平(TTR 0.024 / distinct-2 0.143 / 余弦 0.279),
+  但首句模板进一步固化(Top1 覆盖 5.3% vs 1.3%, Top5 12.3% vs 6.7%)——
+  RL 未修复多样性坍缩, 反而加剧了开头句式的集中。
+
+# 7. 备忘
 
 ```bash
 make games-sidreasoner-rl-data                          # 从当前 CSV+index 重建 RL parquet(切 SID 后自动生效, 无需手动)

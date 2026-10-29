@@ -53,7 +53,9 @@ endif
 	games-rqvae-embed office-rqvae-embed industrial-rqvae-embed \
 	games-rqvae-train office-rqvae-train industrial-rqvae-train \
 	games-rqvae-apply office-rqvae-apply industrial-rqvae-apply \
-	games-sid-switch office-sid-switch industrial-sid-switch
+	games-sid-switch office-sid-switch industrial-sid-switch \
+	games-diversity-collect office-diversity-collect industrial-diversity-collect \
+	games-diversity-report office-diversity-report industrial-diversity-report
 
 # HF 家族按官方 install_vllm_sglang_mcore.sh 时代(2025-04, 与 vllm 0.8.5
 # 配套)整族钉死: 5.x 移除了 AutoModelForVision2Seq 等, 单独放宽会连锁报错
@@ -221,6 +223,23 @@ industrial-rqvae: industrial-rqvae-embed industrial-rqvae-train industrial-rqvae
 # SID 集切换(官方 <-> 自建), SID=official|own 必选
 games-sid-switch office-sid-switch industrial-sid-switch:
 	DATASET=$(@:-sid-switch=) SID=$${SID:?需要 SID=official|own} $(PY) -m src.data.sid_switch
+
+# 思维链多样性分析(两个阶段): 采集 -> 报告
+# 采集来源经环境变量或 CLI 参数控制(见 src/analysis/collect_diversity_corpora.py):
+#   make games-diversity-collect                       # 默认 teacher + 本地 stage2
+#   TEACHER=1 MODEL_SPECS="stage2=<ckpt>" IMPORT_SPECS="stage3=<think.json>" \
+#       make games-diversity-collect NUM=300            # 全部三个对象
+#   make games-diversity-report                         # 统计 + report.md
+define DIVERSITY_TARGET
+$(1)-diversity-collect:
+	DATASET=$(1) $(PY) -m src.analysis.collect_diversity_corpora
+$(1)-diversity-report:
+	DATASET=$(1) $(PY) -m src.analysis.diversity_report
+endef
+
+$(eval $(call DIVERSITY_TARGET,games))
+$(eval $(call DIVERSITY_TARGET,office))
+$(eval $(call DIVERSITY_TARGET,industrial))
 
 smoke:
 	$(PY) tests/test_smoke.py
