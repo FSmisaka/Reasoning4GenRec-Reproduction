@@ -90,12 +90,14 @@ case "${REWARD}" in
         exit 1
     fi
     REWARD_FLAGS="actor_rollout_ref.rollout.sid_beam_size=${SID_BEAM} actor_rollout_ref.rollout.sid_length=${SID_LEN}"
+    # reward_kwargs 在 verl 配置里是空 dict, Hydra struct 模式禁止直接新增键,
+    # 必须带 '+' 前缀追加(+custom_reward_function.reward_kwargs.xxx=...)
     REWARD_FLAGS="${REWARD_FLAGS} $(${PY} - <<'EOF' | tr '\n' ' '
 from config import load_config
 rk = load_config("sidreasoner")["rl"].get("reward_kwargs", {}) or {}
 for k, v in rk.items():
     v = ("true" if v else "false") if isinstance(v, bool) else v
-    print(f"custom_reward_function.reward_kwargs.{k}={v}")
+    print(f"+custom_reward_function.reward_kwargs.{k}={v}")
 EOF
 )"
     REWARD_SUFFIX="_rolloutbeam"

@@ -173,7 +173,10 @@ def _as_id_list(x):
 
 
 def collect_generate(cfg, model_path, num, seed, batch_size, max_new_tokens,
-                     device="auto", dtype="auto"):
+                     device="auto", dtype="auto", sampling=None):
+    """sampling: None=贪心(评测口径); 'default'=模型 generation_config
+    自带的采样参数(Qwen3 默认 T=0.6, top_p=0.95, top_k=20); 或浮点字符串
+    = 指定温度(top_p/top_k 仍跟随模型默认)。"""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -214,6 +217,43 @@ def collect_generate(cfg, model_path, num, seed, batch_size, max_new_tokens,
     if hasattr(model, "generation_config"):
         for k in ("temperature", "top_p"):
             setattr(model.generation_config, k, None)
+
+    # 采样设置: None=贪心(评测口径, 不采样); 其余按 sampling 解析
+    gen_kwargs = {"do_sample": False}
+    if sampling:
+        torch.manual_seed(seed)
+        gen_kwargs["do_sample"] = True
+        gcfg = getattr(model, "generation_config", None)
+        # 恢复被上面置空的默认值(从 checkpoint 的 generation_config.json 读)
+        raw = {}
+        try:
+            import json as _json
+
+            _p = os.path.join(model_path, "generation_config.json")
+            if os.path.exists(_p):
+                raw = _json.load(open(_p))
+        except Exception:
+            raw = {}
+        if str(sampling).lower() in ("default", "config"):
+            temp = raw.get("temperature", 1.0)
+        else:
+            try:
+                temp = float(sampling)
+            except ValueError:
+                raise SystemExit(
+                    f"--sampling 只接受 default 或数字, 收到: {sampling}"
+                )
+        gen_kwargs["temperature"] = temp
+        top_p = raw.get("top_p")
+        top_k = raw.get("top_k")
+        if top_p is not None:
+            gen_kwargs["top_p"] = top_p
+        if top_k:
+            gen_kwargs["top_k"] = top_k
+        print(
+            f"[collect] 采样模式: temperature={temp}, "
+            f"top_p={top_p}, top_k={top_k} (贪心对照见默认口径)"
+        )
 
     # 与 sidreasoner_eval_think.py 相同的评测数据集与采样:
     # 同 num/seed 下不同模型拿到的测试用户完全一致
@@ -257,8 +297,8 @@ def collect_generate(cfg, model_path, num, seed, batch_size, max_new_tokens,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 max_new_tokens=max_new_tokens,
-                do_sample=False,
                 pad_token_id=tokenizer.eos_token_id,
+                **gen_kwargs,
             )
         texts = tokenizer.batch_decode(
             out[:, max_len:], skip_special_tokens=False
@@ -375,6 +415,12 @@ def main():
              "减少截断偏差; MAX_NEW_TOKENS=256 可对齐官方)",
     )
     parser.add_argument(
+        "--sampling", default=os.environ.get("SAMPLING", ""),
+        help="生成模式: 空(默认)=贪心(评测口径); 'default'=模型 "
+             "generation_config 自带采样(Qwen3 默认 T=0.6, top_p=0.95, "
+             "top_k=20); 或数字如 1.0 = 指定温度(top_p/top_k 跟随默认)",
+    )
+    parser.add_argument(
         "--force", action="store_true",
         default=bool(os.environ.get("FORCE")),
         help="覆盖已存在的语料文件",
@@ -425,10 +471,11 @@ def main():
         )
     for name, path in model_specs.items():
         plans.append(
-            (name, f"generate:{path}",
-             lambda p=path: collect_generate(
+            (name, f"generate:{path}"
+             + (f"@sampling={args.sampling}" if args.sampling else ""),
+             lambda p=path, s=args.sampling or None: collect_generate(
                  cfg, p, args.num, args.seed, args.batch_size,
-                 args.max_new_tokens,
+                 args.max_new_tokens, sampling=s,
              ))
         )
     for name, path in import_specs.items():
@@ -453,6 +500,7 @@ def main():
             "n_docs": len(records),
             "num": args.num,
             "seed": args.seed,
+            "sampling": args.sampling or "greedy",
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         save_manifest(root, manifest)

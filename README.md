@@ -36,8 +36,7 @@ office / industrial 把 `games` 换掉即可。
 
 # 3. SIDReasoner(KDD'26)
 
-以 games 为例(office / industrial 同名替换), 论文 Table 2 的最终结果
-= 三个阶段全部完成后, 以 Stage 3 模型做思考模式评估:
+论文 Table 2 = 3 阶段后, 以 Stage 3 模型做思考模式评估:
 
 ```bash
 # 0) 一次性准备
@@ -50,86 +49,42 @@ make games-sidreasoner-activation      # Stage 2: 推理激活 SFT
 make games-sidreasoner-rl              # Stage 3: GRPO 强化学习(前置见下)
 make games-sidreasoner-rl-beam         # Stage 3 变体: OneRec-Think Rollout-Beam reward(见下)
 
-# 三个阶段都是长任务(Stage 1 数天), 建议挂 tmux 跑(SSH 断开后服务器上继续,
-# 输出同时落盘 logs/<会话名>.log; 不指定卡则自动挑选至多 4 张空闲卡):
+# 挂 tmux 跑:
 make tmux TARGET=games-sidreasoner-sft SESSION=sft
-tmux attach -t sft                     # 接回实时查看; 退出查看按 Ctrl-b 再按 d
-# 断线重连后找回任务:
 tmux ls                                # 1. 列出服务器上仍在跑的会话
 tmux attach -t sft                     # 2. 接回对应会话(Ctrl-b d 只退出查看, 不停任务)
-tail -f logs/sft.log                   #    不接会话也可直接读落盘日志
+tmux kill-session -t sft               # 3. 清理会话
 
 # 2) 合并 Stage 3 的 FSDP 分片 checkpoint
 make games-sidreasoner-merge
+make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam
 
 # 3) 思考模式评估 + 计算指标
 make games-sidreasoner-think \
     MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B/global_step_100/actor_merged
 make games-sidreasoner-metrics         # 自动取最新 *_think_*.json, 可用 RESULT=xxx.json 指定
 
-# 中间对照(非思考模式): MODEL 取 stage1 / stage2 / 任意 checkpoint 路径
+# 非思考模式: MODEL 取 stage1 / stage2 / 任意 checkpoint 路径
 make games-sidreasoner-eval MODEL=stage2
 ```
 
-## 本地把玩三个阶段的 checkpoint(终端对话, Mac 可跑)
-
-`src/eval/sidreasoner_chat.py` 提供网页 AI 式的终端交互, 直观感受三个阶段
-各自学会了什么(Stage 1 认 SID、会翻译; Stage 2 先思考再作答但内容较套路;
-Stage 3 推理更自主、SID 更准)。三个 checkpoint 都是自包含 HF 目录(模型 +
-含 SID token 的 tokenizer), 从服务器整目录拷回即可(每个约 3.5GB);
-Stage 3 需先在服务器 `make games-sidreasoner-merge` 再拷 `actor_merged`:
+## 把玩 (终端对话)
 
 ```bash
-# 服务器上打包
-tar czf sidreasoner_ckpt.tgz \
-  runs/sidreasoner/Video_Games_stage1_sft/final_checkpoint \
-  runs/sidreasoner/Video_Games_stage2_activation/final_checkpoint \
-  checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B/global_step_100/actor_merged
-# 拷回本地, 在仓库根目录解压(tar xzf)后:
 make games-sidreasoner-chat MODEL=runs/sidreasoner/Video_Games_stage1_sft/final_checkpoint
 ```
 
-office / industrial 把 `games` 换掉即可。会话内 `/help` 查看全部命令:
-
-- **Stage 1**: 进会话先 `/think off`(它学的是空思考壳后直答), 再 `/t1`
-  `/t2` 验证 SID<->标题互译, `/t3` 观察直答 SID(无推理)。
-- **Stage 2/3**: 保持 `/think on`(默认), `/t3` 出推荐题, 观察先 `<think>`
-  推理再输出 SID; `/score <a_x><b_y><c_z>` 按论文奖励规则
-  (0.25/0.5/1.0 步进 + 0.1 格式)给上一条回答打分, `/t2` 的标准答案会
-  自动记录、随后直接 `/score` 即可。三个阶段各开一次会话玩同样的题,
-  对比就是最直观的 case 分析。
-- 默认每条输入独立单轮(贴近训练分布), `/multi on` 切多轮; `/temp 0` 贪心。
-- 纯本地只依赖 torch + transformers(无需 vllm/verl); Mac 自动用
-  MPS + float32(24GB 内存足够), 服务器上可
-  `--device cuda --dtype bfloat16` 加速。
+会话内 `/help` 查看全部命令
 
 不想从头训练: 下载[官方 checkpoint](https://huggingface.co/Sober-Clever/SIDReasoner-Models)
 后跳过步骤 1)-2), 直接跑 think + metrics。
 
-## Stage 3 前置(一次性)
+## Stage 3 前置
 
 ```bash
 git clone --depth 1 https://github.com/HappyPointer/SIDReasoner ../SIDReasoner   # verl fork
-make install-rl-env        # 或直接用官方 docker 镜像(推荐):
-                           # hiyouga/verl:ngc-th2.6.0-cu126-vllm0.8.4-flashinfer0.2.2-cxx11abi0
-```
-
-网络慢导致安装耗时长时, 同样可挂 tmux 跑(断开 SSH 不中断, 上述三个变量会转发):
-
-```bash
 make tmux TARGET=install-rl-env USE_MEGATRON=0 USE_SGLANG=0   # 跳过用不到的 Megatron/sglang
-tmux attach -t r4g_install_rl_env                             # 接回查看(Ctrl-b d 退出查看)
 ```
-
-- RL 的初始策略固定为 Stage 2 输出, 脚本自动引用, 无需配置。
-- **HF 包版本已整族钉死**: `make setup` 与 `make install-rl-env` 会安装官方脚本
-  (`install_vllm_sglang_mcore.sh`, 2025-04, 与 vllm 0.8.5/torch 2.6 配套)时代的组合——
-  transformers 4.51.3 / tokenizers 0.21.1 / huggingface-hub 0.30.2 / datasets 3.5.1 /
-  accelerate 1.6.0 / peft 0.15.0。verl fork 与训练代码依赖 transformers 4.x,
-  **请勿手动升级这几个包**; 若已升级坏, 见文末常见问题。
-- verl fork 位置默认 `../SIDReasoner`, 可用 config 的 `rl.verl_home` 或 `VERL_HOME=... make games-sidreasoner-rl` 覆盖。
-- docker 镜像内运行: `PY=python3 bash scripts/sidreasoner/rl.sh`。
-- 不想用 wandb: 把 config 的 `rl.use_wandb`、`training.*.report_to` 关掉。
 
 ## Stage 3 奖励变体: OneRec-Think Rollout-Beam(可选)
 
@@ -255,29 +210,7 @@ python -m pytest tests/test_sid_rewards.py -v   # 纯 Python, 无需 GPU/verl
 # venv 里没有 pytest 时: .venv/bin/pip install pytest, 再用 .venv/bin/python -m pytest ...
 ```
 
-### 常见问题(Rollout-Beam)
-
-- **报 `OneRecThinkRolloutBeamReward 需要逐 rollout 的 beam search 结果`**:
-  verl fork 还是原版(未含 beam 基建)或 `actor_rollout_ref.rollout.sid_beam_size`
-  未生效, 按上文"前置"校验并替换。
-- **奖励全 0**: 确认 `rl.sid_beam_size > 1`; 另检查 Stage 2 checkpoint 的
-  输出里 `</think>` 是否正常出现(模型没学会闭合思考时该条奖励为 0)。
-- **steprule 与 rollout-beam 的 think 结果互相覆盖**: 两者评估输出
-  文件名相同(都按 `actor_merged` 命名), 用上文的 `mv` + `RESULT=` 区分。
-
-## 论文参考值(Table 2, R@5 / N@5 / R@10 / N@10)
-
-| 数据集 | R@5 | N@5 | R@10 | N@10 |
-|---|---|---|---|---|
-| games | 0.0710 | 0.0460 | 0.1031 | 0.0563 |
-| office | 0.1373 | 0.1119 | 0.1648 | 0.1208 |
-| industrial | 0.1109 | 0.0905 | 0.1438 | 0.1010 |
-
 # 4. 自建 SID(独立训练 RQ-VAE)
-
-官方 SID 是上游预计算产物(3 层 x 每层 256 code, 即 `<a_N><b_N><c_N>`),
-本仓库不含其生成代码。以下流程在 item.json 文本上独立训练一个
-RQ-VAE, 产出一份自己的 SID 并级联替换全部消费文件。
 
 ## 构建流程
 
@@ -437,6 +370,28 @@ DATASET=games .venv/bin/python -m src.analysis.diversity_report \
 - 全量数值与采样 300 的数值不可直接对调着比(语料级指标依赖规模),
   对比请始终在同一份 report 内进行。
 
+## 温度对照实验(检验"teacher 多样性是否来自采样温度")
+
+采集脚本支持采样生成: `SAMPLING=default`(模型 generation_config 自带,
+Qwen3 默认 T=0.6, top_p=0.95, top_k=20)或 `SAMPLING=1.0`(指定温度)。
+对照语料命名加 `_temp` 后缀, 与贪心语料并存; 统计结果用 `--out`
+写到独立文件, 不覆盖贪心版:
+
+```bash
+# ① 服务器上(A800, 全量测试集, bf16, 大 batch)生成采样版语料
+DATASET=games SAMPLING=default NUM=-1 BATCH_SIZE=64 \
+    FORCE=1 MODEL_SPECS="stage2_temp=runs/sidreasoner/Video_Games_stage2_activation/final_checkpoint,stage3_temp=runs/sidreasoner/Video_Games_stage3/actor_merged_1900" \
+    make games-diversity-collect
+# ② 同一套统计, 输出 analysis_temp.json / analysis_temp.md
+#    (corpora 全部参与: teacher + 贪心 stage2/stage3 + 采样 *_temp, 等量化对齐)
+DATASET=games FULL=1 PAIR_CAP=2000 DEVICE=cuda OUT=analysis_temp.json \
+    make games-diversity-report
+```
+
+解读: 若 `*_temp` 的首句唯一率/成对余弦明显接近 teacher, 说明先前差距
+有相当部分是"贪心 vs 采样"的解码混杂; 若仍与贪心版接近, 则多样性
+坍缩是模型分布的属性, 与解码温度无关。
+
 - games 上的初步结论(300 条, seed 42, 三语料同测试用户): stage2 相对
   teacher, TTR 减半(0.024 vs 0.045)、distinct-2 减半(0.139 vs 0.296)、
   成对余弦均值 +50%(0.285 vs 0.189)、gzip 率更低、首句模板 Top5 覆盖
@@ -445,43 +400,3 @@ DATASET=games .venv/bin/python -m src.analysis.diversity_report \
   指标与 stage2 几乎持平(TTR 0.024 / distinct-2 0.143 / 余弦 0.279),
   但首句模板进一步固化(Top1 覆盖 5.3% vs 1.3%, Top5 12.3% vs 6.7%)——
   RL 未修复多样性坍缩, 反而加剧了开头句式的集中。
-
-# 7. 备忘
-
-```bash
-make games-sidreasoner-rl-data                          # 从当前 CSV+index 重建 RL parquet(切 SID 后自动生效, 无需手动)
-make games-sidreasoner-merge EVAL_INTERVAL=100          # 只合并特定步数间隔
-make games-sidreasoner-sft CUDA_VISIBLE_DEVICES=0,1,2,3 # 指定训练用卡(不指定则自动选空闲卡)
-make tmux TARGET=games-sidreasoner-sft  # 挂 tmux 后台跑长任务(断开 SSH 不中断; 卡自动挑选)
-make games-sidreasoner-eval CUDA_LIST="0 1"             # 指定评估用卡(默认 0 1)
-DATASET=games bash scripts/sidreasoner/sft.sh           # 等价的手动运行方式
-DATASET=games .venv/bin/python -m src.train.tiger
-```
-
-- 训练数据已随仓库就位(`data/raw/Amazon/`), 无需下载。
-- Stage 1/2 输出在 `runs/sidreasoner/`, Stage 3 在 `checkpoints/RecRL_Reasoning/`, 评估结果在 `results/sidreasoner/`。
-- 8 种对齐任务的 prompt 模板与 GPT-4o-mini 语料增强 prompt 见 `docs/sidreasoner_prompts.md`。
-
-## 常见问题(SIDReasoner)
-
-- **无外网服务器启动即报 `Errno 97 ... huggingface.co`**: `model.base_model`
-  为 HF id 时启动会尝试联网下载。解决: 经镜像下载到本地并改 config 指向
-  本地路径(`export HF_ENDPOINT=https://hf-mirror.com` 后执行
-  `huggingface-cli download Qwen/Qwen3-1.7B --local-dir ./models/Qwen3-1.7B`,
-  再把 `model.base_model` 改为 `"./models/Qwen3-1.7B"`);
-  可再加 `export HF_HUB_OFFLINE=1` 杜绝残余联网探测。
-- **wandb 连不上**: 同因无外网。把 config 中 sft/activation 的
-  `report_to` 改为 `"none"`, 或 `export WANDB_MODE=offline`。
-- **torchrun 开头 `socket.cpp:759 Address family not supported`**:
-  本机 IPv6 探测警告, 自动回落 IPv4, 无害可忽略。
-- **Stage 3 报 `cannot import name 'AutoModelForVision2Seq'`(或 `TrainingArguments` 没有
-  `group_by_length` 参数)**: transformers 被依赖解析装成了 5.x, 而官方 verl fork 与训练
-  代码需要 4.x。**必须整族同代降级**(只降 transformers 会连锁触发 huggingface-hub /
-  datasets 的 `ImportError`):
-  ```bash
-  .venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
-      "transformers==4.51.3" "tokenizers==0.21.1" "huggingface-hub==0.30.2" \
-      "datasets==3.5.1" "accelerate==1.6.0" "peft==0.15.0"
-  ```
-  之后用 `python -c "from transformers import AutoModelForVision2Seq; import datasets,
-  transformers, accelerate, peft, vllm; print('all ok')"` 验证。

@@ -108,10 +108,14 @@ def first_sentence(text):
     return s
 
 
-def opener_template(text):
-    """首句模板: 小写、SID -> <sid>、数字 -> <num>、去多余空白。"""
+def opener_template(text, generalize_sid=True):
+    """首句模板: 小写、数字 -> <num>、去多余空白。
+    generalize_sid=True 时 SID -> <sid>(默认, 与 teacher/模型语料
+    同一套归并规则); False 时 SID 原样保留, 用于区分"连 SID 都一字
+    不差"与"仅引用物品不同"两种首句重复。"""
     s = first_sentence(text).lower()
-    s = SID_RE.sub("<sid>", s)
+    if generalize_sid:
+        s = SID_RE.sub("<sid>", s)
     s = re.sub(r"\d+(?:\.\d+)?", "<num>", s)
     s = re.sub(r"[^a-z0-9<> '.-]", " ", s)
     return re.sub(r"\s+", " ", s).strip(" .,-")
@@ -455,12 +459,20 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
             [content_tok_lists[i] for i in idx], device
         )
 
-    # 首句模板
+    # 首句模板: 双口径 —— 泛化(SID-><sid>, 跨物品归并) 与
+    # 原样(SID 原文保留, 仅统计连 SID 都一致的逐字重复)
     openers = [opener_template(d) for d in docs]
     opener_counts = Counter(openers)
     opener_top = [
         {"opener": o, "count": c, "frac": round(c / len(openers), 4)}
         for o, c in opener_counts.most_common(top)
+    ]
+    openers_strict = [opener_template(d, generalize_sid=False)
+                      for d in docs]
+    strict_counts = Counter(openers_strict)
+    strict_top = [
+        {"opener": o, "count": c, "frac": round(c / len(openers_strict), 4)}
+        for o, c in strict_counts.most_common(top)
     ]
 
     # gzip 压缩率: 原文(全词)与去停用词拼接文本双口径
@@ -506,6 +518,16 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
                 sum(o["frac"] for o in opener_top[:5]), 4
             ),
             "top": opener_top[:10],
+        },
+        "openers_strict": {
+            "unique_ratio": round(
+                len(strict_counts) / len(openers_strict), 4
+            ),
+            "top1_frac": strict_top[0]["frac"] if strict_top else 0.0,
+            "top5_frac": round(
+                sum(o["frac"] for o in strict_top[:5]), 4
+            ),
+            "top": strict_top[:10],
         },
         "gzip_ratio": round(gzip_ratio, 4),
         "gzip_ratio_content": round(gzip_ratio_content, 4),
@@ -618,6 +640,13 @@ def render_corpus_section(name, res, top_in_md):
         f"Top1 覆盖 {_fmt_pct(op['top1_frac'])}, "
         f"Top5 覆盖 {_fmt_pct(op['top5_frac'])}\n"
     )
+    ops = text["openers_strict"]
+    out.append(
+        f"- 首句模板(原样, SID 不泛化, 即连 SID 都逐字一致的口径): "
+        f"唯一率 {_fmt_pct(ops['unique_ratio'])}, "
+        f"Top1 覆盖 {_fmt_pct(ops['top1_frac'])}, "
+        f"Top5 覆盖 {_fmt_pct(ops['top5_frac'])}\n"
+    )
     for o in op["top"][:5]:
         out.append(
             f"  - ({o['count']}x, {o['frac']:.1%}) {o['opener'][:120]}\n"
@@ -700,6 +729,11 @@ def main():
                              "约 4 万篇; OOM 自动回退 CPU)")
     parser.add_argument("--seed", type=int,
                         default=int(os.environ.get("SEED", 42)))
+    parser.add_argument(
+        "--out", default=os.environ.get("OUT", "analysis.json"),
+        help="分析结果 JSON 文件名(如 analysis_temp.json, 与贪心版隔离);"
+             " markdown 报告同名替换扩展名",
+    )
     args = parser.parse_args()
     if args.full:
         args.max_docs = 0
@@ -788,7 +822,7 @@ def main():
         res["meta"]["think_closed_frac"] = round(closed_frac, 4)
         results[name] = res
 
-    analysis_path = os.path.join(root, "analysis.json")
+    analysis_path = os.path.join(root, args.out)
     with open(analysis_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 
@@ -823,7 +857,7 @@ def main():
     if errors:
         md.append("\n## 警告\n\n" + "\n".join(f"- {e}" for e in errors))
 
-    report_path = os.path.join(root, "report.md")
+    report_path = os.path.join(root, os.path.splitext(args.out)[0] + ".md")
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("".join(md))
     print(f"[report] 分析: {analysis_path}")
