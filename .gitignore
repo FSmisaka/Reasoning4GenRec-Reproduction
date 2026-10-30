@@ -29,6 +29,7 @@ runs/*
 checkpoints/
 output/
 outputs/
+results/diversity/
 *.pt
 *.ckpt
 *.safetensors
