@@ -112,6 +112,22 @@ CONFIG: Dict[str, Any] = {
         "use_remove_padding": True,
         "project_name": "RecRL_Reasoning",
         "data_dir": None,
+        # ---- Stage 3 奖励(rl.sh 据此选择 reward 文件与是否开 beam search) ----
+        # steprule: 论文原版(采样 SID 0.25/0.5/1.0 步进 + 0.1 格式分), 默认;
+        # rollout_beam: OneRec-Think Rollout-Beam(arXiv:2510.11639 Eq.6-7),
+        #   每条 rollout 的 CoT 之后做宽度 K 的 beam search 取 K 个候选 SID,
+        #   奖励 = 候选中与 ground truth 匹配 code 数(共 L 层)的最大值。
+        #   需配合修改过的 SIDReasoner verl fork(rollout 侧 beam search 基建)。
+        "reward": "steprule",
+        "sid_beam_size": 4,  # rollout_beam: beam 宽度 K, 必须 >1 才会在 rollout 后做 beam search
+        "sid_length": 3,     # rollout_beam: SID 层数 L(<a_*><b_*><c_*> 为 3)
+        # rollout_beam: 转发给 src/reward/sid_rewards/ 的构造参数:
+        "reward_kwargs": {
+            "reward_type": "onerec_rollout_beam",
+            "match_mode": "position",   # position=论文式逐层比对; prefix=前缀连续匹配(StepRule 式对照)
+            "normalize": False,         # 匹配数除以 L, 奖励归一到 [0,1]
+            "format_reward_weight": 0.0,  # 采样 SID 合法性的附加格式分(论文无此项, >0 时按 DATASET 自动找 info 文件)
+        },
     },
     "evaluation": {
         "num_beams": 10,

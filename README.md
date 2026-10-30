@@ -48,6 +48,7 @@ make install-vllm          # 思考模式评估需要
 make games-sidreasoner-sft             # Stage 1: 增强式 SID-语言对齐 SFT
 make games-sidreasoner-activation      # Stage 2: 推理激活 SFT
 make games-sidreasoner-rl              # Stage 3: GRPO 强化学习(前置见下)
+make games-sidreasoner-rl-beam         # Stage 3 变体: OneRec-Think Rollout-Beam reward(见下)
 
 # 三个阶段都是长任务(Stage 1 数天), 建议挂 tmux 跑(SSH 断开后服务器上继续,
 # 输出同时落盘 logs/<会话名>.log; 不指定卡则自动挑选至多 4 张空闲卡):
@@ -130,6 +131,140 @@ tmux attach -t r4g_install_rl_env                             # 接回查看(Ctr
 - docker 镜像内运行: `PY=python3 bash scripts/sidreasoner/rl.sh`。
 - 不想用 wandb: 把 config 的 `rl.use_wandb`、`training.*.report_to` 关掉。
 
+## Stage 3 奖励变体: OneRec-Think Rollout-Beam(可选)
+
+默认 Stage 3 用论文原版 StepRule 奖励(对 rollout 采样出的那一个 SID 给
+0.25/0.5/1.0 步进分 + 0.1 格式分)。本变体换成 OneRec-Think
+(arXiv:2510.11639, Eq. 6-7)的 **Rollout-Beam 奖励**: 每条 rollout 的
+思维链 CoT 之后, 由 vLLM rollout worker 以宽度 K 再做一次 SID beam
+search, 取 K 个候选 SID 中与 ground truth 匹配 code 数(共 L 层)最多者
+作为该 CoT 的奖励:
+
+```text
+R_Rollout-Beam = max_{ŝ∈B(τ)} Σ_{l=1..L} 1[ŝ^l = s_gt^l]
+```
+
+直观理解: 不按"模型这次恰好采样出的 SID"给分, 而是按"模型沿这条思维链
+最多能推荐到多准"给分。采样 SID 绝大多数全错导致 GRPO 组内优势恒为 0
+的问题可被缓解, 同时奖励与 beam-search 推理保持一致。
+
+### 前置(一次性): 同步修改版 verl fork
+
+beam search 基建位于 SIDReasoner verl fork 内部(rollout worker 截断
+`</think>` 后跑 beam、ray_trainer 把 K 个候选注入 `extra_info`、
+`rollout.yaml` 的 `sid_beam_size/sid_length` 配置项), r4gr 只负责入口与
+奖励实现。请把本地**修改版 SIDReasoner** 同步到服务器, 替换
+`../SIDReasoner`(或按上文方式用 `VERL_HOME` 指向它), 并校验:
+
+```bash
+grep -n "sid_beam_size" ../SIDReasoner/verl/trainer/config/rollout/rollout.yaml
+grep -n "truncate_after_think_for_beam" \
+    ../SIDReasoner/verl/workers/rollout/vllm_rollout/vllm_rollout_spmd.py
+grep -n "inject_beam_search_results" ../SIDReasoner/verl/trainer/ppo/ray_trainer.py
+```
+
+三条命令都有输出即就绪(普通 Stage 3 不受这些改动影响)。
+
+### 训练 / 合并 / 评估(终端操作)
+
+```bash
+# Stage 3(Rollout-Beam): 从同一个 Stage 2 checkpoint 出发, 其余流程与默认一致
+make games-sidreasoner-rl-beam
+# 长任务同样建议挂 tmux(断开 SSH 不中断):
+make tmux TARGET=games-sidreasoner-rl-beam SESSION=rlbeam
+
+# 等价手动方式(docker 镜像内同理, 前缀 PY=python3):
+DATASET=games bash scripts/sidreasoner/rl_beam.sh
+
+# 合并 FSDP 分片 checkpoint(默认目录自动加 _rolloutbeam 后缀):
+make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam
+
+# 思考模式评估(实验目录名多了 _rolloutbeam):
+make games-sidreasoner-think \
+    MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam/global_step_100/actor_merged
+
+# 评估结果文件名由模型目录名生成, 与 steprule 的结果会同名互相覆盖;
+# 出结果后先改名, 再分别算指标:
+mv results/sidreasoner/Video_Games_think_actor_merged.json \
+   results/sidreasoner/Video_Games_think_beam_step100.json
+make games-sidreasoner-metrics \
+    RESULT=results/sidreasoner/Video_Games_think_beam_step100.json
+```
+
+A/B 对照: `make games-sidreasoner-rl`(StepRule)与
+`make games-sidreasoner-rl-beam`(Rollout-Beam)产物按后缀隔离
+(wandb experiment、checkpoint、merge 目录均带 `_rolloutbeam`; 自建
+SID 时叠加为 `_own_rolloutbeam`), 两套可并存直接对比。office /
+industrial 把 `games` 换掉即可。
+
+### 奖励参数(统一改 config/sidreasoner.py 的 rl 段)
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `reward` | `"steprule"` | `steprule`(论文原版)/ `rollout_beam`; `rl.sh` 据此选择 reward 文件(不改则默认行为不变) |
+| `sid_beam_size` | `4` | beam 宽度 K; 必须 >1, 否则 rl.sh 直接报错(防止奖励恒为 0) |
+| `sid_length` | `3` | SID 层数 L(`<a_*><b_*><c_*>` 为 3) |
+| `reward_kwargs.reward_type` | `"onerec_rollout_beam"` | 注册表中的 reward 实现 |
+| `reward_kwargs.match_mode` | `"position"` | `position`=论文式逐层比对; `prefix`=前缀连续匹配(StepRule 式对照实验) |
+| `reward_kwargs.normalize` | `False` | 匹配数除以 L, 奖励归一到 [0,1] |
+| `reward_kwargs.format_reward_weight` | `0.0` | 采样 SID 合法性的附加格式分(论文无此项; >0 时按 DATASET 自动找 info 文件) |
+
+说明: `make games-sidreasoner-rl-beam` 用环境变量强制
+`reward=rollout_beam`; 若直接把配置改成 `"reward": "rollout_beam"`,
+普通 `make games-sidreasoner-rl` 也会走 Rollout-Beam。`make
+games-sidreasoner-rl` 的默认(配置默认值)仍是 StepRule, 原有行为不变。
+
+### 数据流与开销
+
+```text
+rollout 采样(CoT + 采样 SID)
+  -> rollout worker 截断到 </think>(含其后换行)
+  -> vLLM beam search(宽度 K, 深度仅 L=3 个 token)
+  -> non_tensor_batch["beam_search_results"]
+  -> ray_trainer 注入每条 rollout 的 extra_info
+  -> src/reward/direct_recommendation_rolloutbeam.py 按 Eq.6-7 打分
+```
+
+每条 rollout 仅多一次 K 宽 × L token 的增量生成, 相对 1024 token 的
+rollout 生成开销可忽略。
+
+### 新增自定义奖励变体(为后续迭代准备)
+
+奖励计算与 trainer 解耦在 `src/reward/sid_rewards/`(纯 Python):
+
+```python
+# src/reward/sid_rewards/my_reward.py
+from .base import BaseSidReward, parse_beam_candidates
+from .registry import register_sid_reward
+
+@register_sid_reward("my_reward")
+class MyReward(BaseSidReward):
+    def compute(self, data_source, solution_str, ground_truth, extra_info=None):
+        gt = self.ground_truth_sids(ground_truth)      # ['<a_1>', '<b_2>', '<c_3>']
+        beams = parse_beam_candidates(                 # 开了 beam search 即有 K 个候选
+            (extra_info or {}).get("beam_search_results"), num_sid=self.num_sid_levels)
+        ...
+```
+
+在 `src/reward/sid_rewards/__init__.py` 里 `from . import my_reward` 注册,
+然后把 `config/sidreasoner.py` 的 `rl.reward_kwargs.reward_type` 改为
+`my_reward` 即可, 无需改 rl.sh / trainer。单测:
+
+```bash
+python -m pytest tests/test_sid_rewards.py -v   # 纯 Python, 无需 GPU/verl
+# venv 里没有 pytest 时: .venv/bin/pip install pytest, 再用 .venv/bin/python -m pytest ...
+```
+
+### 常见问题(Rollout-Beam)
+
+- **报 `OneRecThinkRolloutBeamReward 需要逐 rollout 的 beam search 结果`**:
+  verl fork 还是原版(未含 beam 基建)或 `actor_rollout_ref.rollout.sid_beam_size`
+  未生效, 按上文"前置"校验并替换。
+- **奖励全 0**: 确认 `rl.sid_beam_size > 1`; 另检查 Stage 2 checkpoint 的
+  输出里 `</think>` 是否正常出现(模型没学会闭合思考时该条奖励为 0)。
+- **steprule 与 rollout-beam 的 think 结果互相覆盖**: 两者评估输出
+  文件名相同(都按 `actor_merged` 命名), 用上文的 `mv` + `RESULT=` 区分。
+
 ## 论文参考值(Table 2, R@5 / N@5 / R@10 / N@10)
 
 | 数据集 | R@5 | N@5 | R@10 | N@10 |
@@ -203,7 +338,7 @@ make games-rqvae-apply      # ③ 备份 + 替换 + 验证
 |---|---|
 | `index/<C>.index.json`<br>(item -> SID 表) | `src/data/sid.py::SidTable` <- `bundle.py::load_bundle`(TIGER 训练 / smoke 测试); `sidreasoner_sft.py` / `sidreasoner_activation.py` 的 paths -> `sidreasoner_data.py` 各 Dataset(SID-语言对齐); `models/sidreasoner.py::TokenExtender`(收集 768 token 扩 Qwen3 词表); `eval/sidreasoner_eval_think.py` |
 | `{train,valid,test}/<C>_5_*.csv`<br>(`history_item_sid` / `item_sid` 两列) | TIGER(经 load_bundle); Stage 1 SFT(`sidreasoner_data.py`); RL parquet 构建(`sidreasoner_rl_data.py`); 非思考评估 `eval/sidreasoner_eval.py` + `scripts/sidreasoner/eval.sh` 的 TEST_FILE; 思考评估 `eval/sidreasoner_eval_think.py`; MiniOneRec(`sasrec_mini.py`) |
-| `info/<C>_5_*.txt`<br>(SID\ttitle\titem_id) | 非思考评估的前缀 trie(`sidreasoner_eval.py`); 思考评估(`sidreasoner_eval_think.py`); **Stage 3 RL 奖励的合法 SID 表**(`reward/direct_recommendation_steprule.py`); 指标计算(`sidreasoner_metrics.py`); MiniOneRec |
+| `info/<C>_5_*.txt`<br>(SID\ttitle\titem_id) | 非思考评估的前缀 trie(`sidreasoner_eval.py`); 思考评估(`sidreasoner_eval_think.py`); **Stage 3 RL 奖励的合法 SID 表**(`reward/direct_recommendation_steprule.py`; Rollout-Beam 变体为 `reward/direct_recommendation_rolloutbeam.py`, 仅格式分开启时用); 指标计算(`sidreasoner_metrics.py`); MiniOneRec |
 | `rec_reasoning_verl/<C>/*.parquet`<br>(prompt 内嵌 SID + ground_truth) | Stage 3 GRPO(`scripts/sidreasoner/rl.sh` 的 `data.train_files/val_files` -> verl) |
 
 不受 SID 影响: SASRec / Caser / GRU4Rec(只用 item_id 列), 以及

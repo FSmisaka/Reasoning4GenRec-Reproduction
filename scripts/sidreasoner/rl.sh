@@ -67,8 +67,47 @@ SID_SUFFIX=$(${PY} -c "from config import load_config; from src.data.sid_switch 
 DATA_DIR=$(${PY} -c "from config import load_config; rl = load_config('sidreasoner')['rl']; print(rl['data_dir'] or '')" 2>/dev/null || true)
 DATA_DIR=${DATA_DIR:-${ROOT}/rec_reasoning_verl/${CATEGORY}}
 STAGE2_CKPT="runs/sidreasoner/${CATEGORY}_stage2_activation${SID_SUFFIX}/final_checkpoint"
-EXPERIMENT_NAME="${CATEGORY}_stage3_rl_Qwen3-1.7B${SID_SUFFIX}"
-REWARD_PATH="$(pwd)/src/reward/direct_recommendation_steprule.py"
+
+# ---- 奖励选择: REWARD 环境变量 > config rl.reward, 默认 steprule(论文原版) ----
+# rollout_beam = OneRec-Think Rollout-Beam reward(arXiv:2510.11639 Eq.6-7):
+# 每条 rollout 的 CoT 之后由 rollout 侧做宽度 K 的 beam search 取 K 个候选
+# SID, 奖励 = 候选中匹配 ground truth 的 code 数(L 层)的最大值。
+# 输出目录自动加 _rolloutbeam 后缀, 与 steprule 的产物互不覆盖。
+REWARD=${REWARD:-$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['rl'].get('reward', 'steprule') or 'steprule')")}
+REWARD_SUFFIX=""
+REWARD_FLAGS=""
+case "${REWARD}" in
+  steprule)
+    REWARD_PATH="$(pwd)/src/reward/direct_recommendation_steprule.py"
+    ;;
+  rollout_beam)
+    REWARD_PATH="$(pwd)/src/reward/direct_recommendation_rolloutbeam.py"
+    SID_BEAM=$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['rl'].get('sid_beam_size', 4))")
+    SID_LEN=$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['rl'].get('sid_length', 3))")
+    if [[ "${SID_BEAM}" -le 1 ]]; then
+        echo "错误: reward=rollout_beam 要求 rl.sid_beam_size > 1(当前 ${SID_BEAM})。" >&2
+        echo "      否则 rollout 侧不做 beam search, 奖励将恒为 0。请改 config/sidreasoner.py。" >&2
+        exit 1
+    fi
+    REWARD_FLAGS="actor_rollout_ref.rollout.sid_beam_size=${SID_BEAM} actor_rollout_ref.rollout.sid_length=${SID_LEN}"
+    REWARD_FLAGS="${REWARD_FLAGS} $(${PY} - <<'EOF' | tr '\n' ' '
+from config import load_config
+rk = load_config("sidreasoner")["rl"].get("reward_kwargs", {}) or {}
+for k, v in rk.items():
+    v = ("true" if v else "false") if isinstance(v, bool) else v
+    print(f"custom_reward_function.reward_kwargs.{k}={v}")
+EOF
+)"
+    REWARD_SUFFIX="_rolloutbeam"
+    ;;
+  *)
+    echo "错误: 未知 rl.reward='${REWARD}', 可选: steprule | rollout_beam" >&2
+    echo "      (或直接用 scripts/sidreasoner/rl_beam.sh / make <dataset>-sidreasoner-rl-beam)" >&2
+    exit 1
+    ;;
+esac
+
+EXPERIMENT_NAME="${CATEGORY}_stage3_rl_Qwen3-1.7B${SID_SUFFIX}${REWARD_SUFFIX}"
 
 export PYTHONPATH="${VERL_HOME}:${PYTHONPATH:-}"
 mkdir -p ./logs
@@ -106,6 +145,7 @@ ${PY} -m verl.trainer.main_ppo \
     trainer.logger="${LOGGER}" \
     custom_reward_function.path="${REWARD_PATH}" \
     custom_reward_function.name="rule_base_reward" \
+    ${REWARD_FLAGS} \
     trainer.project_name="${PROJECT}" \
     trainer.experiment_name="${EXPERIMENT_NAME}" \
     trainer.n_gpus_per_node=${N_GPUS} \

@@ -43,6 +43,7 @@ endif
 	games-sidreasoner-sft office-sidreasoner-sft industrial-sidreasoner-sft \
 	games-sidreasoner-activation office-sidreasoner-activation industrial-sidreasoner-activation \
 	games-sidreasoner-rl office-sidreasoner-rl industrial-sidreasoner-rl \
+	games-sidreasoner-rl-beam office-sidreasoner-rl-beam industrial-sidreasoner-rl-beam \
 	games-sidreasoner-eval office-sidreasoner-eval industrial-sidreasoner-eval \
 	games-sidreasoner-think office-sidreasoner-think industrial-sidreasoner-think \
 	games-sidreasoner-metrics office-sidreasoner-metrics industrial-sidreasoner-metrics \
@@ -129,9 +130,11 @@ industrial-gru4rec:
 
 # SIDReasoner: 目标名 <dataset>-sidreasoner-<step>
 #   sft / activation / rl / eval  -> scripts/sidreasoner/<step>.sh
+#   rl-beam                       -> rl.sh 的 Rollout-Beam reward 变体(rl_beam.sh)
 #   think / rl-data               -> 直接调 python 模块(MODEL= 可覆盖待评模型)
 #   metrics                       -> 对最新 think 结果计算 HR@K / NDCG@K
 #   merge                         -> 合并 Stage 3 的 FSDP 分片 checkpoint
+#                                    (rl-beam 产物用 RL_SUFFIX=_rolloutbeam)
 define SIDREASONER_TARGET
 $(1)-sidreasoner-$(3):
 	DATASET=$(1) CUDA_VISIBLE_DEVICES="$(SIDR_GPUS)" bash scripts/sidreasoner/$(2).sh
@@ -167,6 +170,9 @@ $(eval $(call SIDREASONER_TARGET,industrial,activation,activation))
 $(eval $(call SIDREASONER_TARGET,games,rl,rl))
 $(eval $(call SIDREASONER_TARGET,office,rl,rl))
 $(eval $(call SIDREASONER_TARGET,industrial,rl,rl))
+$(eval $(call SIDREASONER_TARGET,games,rl_beam,rl-beam))
+$(eval $(call SIDREASONER_TARGET,office,rl_beam,rl-beam))
+$(eval $(call SIDREASONER_TARGET,industrial,rl_beam,rl-beam))
 $(eval $(call SIDREASONER_TARGET,games,eval,eval))
 $(eval $(call SIDREASONER_TARGET,office,eval,eval))
 $(eval $(call SIDREASONER_TARGET,industrial,eval,eval))
