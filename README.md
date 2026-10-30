@@ -262,7 +262,9 @@ IMPORT_SPECS="stage3=results/sidreasoner/Video_Games_think_xxx.json" \
 
 # ② 统计报告: TF-IDF 词频 / bigram 频率 / TTR 与 distinct-n / 熵 /
 #    完全重复率 / 成对 TF-IDF 余弦与 3-gram Jaccard / 首句模板集中度 /
-#    gzip 压缩率 / 最相似样本对示例; text 与 raw(含 SID)双视角
+#    gzip 压缩率 / 最相似样本对示例; text 与 raw(含 SID)双视角;
+#    词汇类指标(TTR/distinct/熵/词表)与 gzip/Jaccard 另有"去停用词"
+#    对照版(*_content 键 / 报告第三张对比表)
 make games-diversity-report
 ```
 

@@ -1,10 +1,11 @@
 # SIDReasoner 思维链多样性报告
 
-数据集: **Video_Games** | 生成时间: 2026-10-29 11:40:04 | 统计参数: top=25, pair_cap=600, max_docs=2000, seed=42, equalize=on, device=mps
+数据集: **Video_Games** | 生成时间: 2026-10-30 09:54:41 | 统计参数: top=25, pair_cap=600, max_docs=2000, seed=42, equalize=on, device=cpu
 
 - text 视角 = 剔除 SID token 后的自然语言; raw 视角 = 保留 SID token。
 - 关键读法: 成对余弦均值/完全重复率/首句 Top 覆盖越高、distinct 与 gzip 率越低, 说明思维链越同质化。
 - equalize=on 时各语料已采样到与最小语料相同的篇数(语料级指标才可跨语料对比); 每个语料的采集总量见其小节。
+- 词汇类指标/gzip/Jaccard 均有 含停用词(默认) 与 去停用词(仅内容词, *_content / '去停用词' 对照) 两套口径。
 
 ### 汇总对比 · text 视角
 
@@ -22,6 +23,14 @@
 | stage3 | 300 | 162.8 | 0.0334 | 0.1813 | 0.7% | 0.2098 | 0.3139 | 0.0% | 0.0558 | 5.3% | 12.3% | 0.169 |
 | teacher | 300 | 164.4 | 0.0527 | 0.3221 | 0.0% | 0.1588 | 0.2272 | 0.0% | 0.0149 | 0.3% | 1.7% | 0.232 |
 
+### 汇总对比 · text · 去停用词 视角
+
+| 语料 | n | 词数均值 | TTR | dist-2(语料) | 完全重复率 | 余弦均值 | 余弦p95 | 余弦>0.8 | Jaccard均值 | 首句Top1 | 首句Top5 | gzip率 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| stage2 | 300 | 147.2 | 0.0365 | 0.2500 | 0.7% | 0.2846 | 0.4314 | 0.0% | 0.0270 | 1.3% | 6.7% | 0.158 |
+| stage3 | 300 | 151.1 | 0.0371 | 0.2562 | 0.7% | 0.2786 | 0.4231 | 0.0% | 0.0263 | 5.3% | 12.3% | 0.162 |
+| teacher | 300 | 154.5 | 0.0669 | 0.4893 | 0.0% | 0.1894 | 0.2697 | 0.0% | 0.0053 | 0.3% | 1.7% | 0.223 |
+
 ## 语料: stage2
 - 来源: generate:runs/sidreasoner/Video_Games_stage2_activation/final_checkpoint | 采集 300 篇, 统计 300 篇 | 思维链完整闭合率 100.0%
 - 文档数 300 | 词数均值 147.2 (p5 125.0, p95 170.1) | 词表 1059 | TTR 0.0240 | gzip率 0.167
@@ -29,6 +38,7 @@
 - 完全重复率 0.7% (298/300 篇唯一);
   - 成对余弦(text): 均值 0.2846, 中位 0.2810, p95 0.4314, >0.6 0.1%, >0.8 0.0% | 3-gram Jaccard: 均值 0.0639, >0.5 0.0%
   - 成对余弦(raw): 均值 0.2097, 中位 0.2056, p95 0.3127, >0.6 0.0%, >0.8 0.0% | 3-gram Jaccard: 均值 0.0561, >0.5 0.0%
+- 去停用词对照(text, 仅内容词): 词表 999 | TTR 0.0365 | distinct-1/2(语料) 0.0365 / 0.2500 | unigram 熵 7.8 bits (归一化 0.779), bigram 熵 11.0 bits (归一化 0.861) | 3-gram Jaccard 均值 0.0270 | gzip率 0.158
 - 首句模板: 唯一率 90.0%, Top1 覆盖 1.3%, Top5 覆盖 6.7%
   - (4x, 1.3%) i observe that the user has a strong inclination towards action-adventure and first-person shooter genres as evidenced b
   - (4x, 1.3%) i observe that the user has a strong inclination towards action-adventure and open-world games as evidenced by their eng
@@ -105,6 +115,7 @@ the user(767), games that(519), that offer(424), may enjoy(374), titles that(358
 - 完全重复率 0.7% (298/300 篇唯一);
   - 成对余弦(text): 均值 0.2786, 中位 0.2763, p95 0.4231, >0.6 0.1%, >0.8 0.0% | 3-gram Jaccard: 均值 0.0625, >0.5 0.0%
   - 成对余弦(raw): 均值 0.2098, 中位 0.2071, p95 0.3139, >0.6 0.0%, >0.8 0.0% | 3-gram Jaccard: 均值 0.0558, >0.5 0.0%
+- 去停用词对照(text, 仅内容词): 词表 1037 | TTR 0.0371 | distinct-1/2(语料) 0.0371 / 0.2562 | unigram 熵 7.8 bits (归一化 0.780), bigram 熵 11.1 bits (归一化 0.864) | 3-gram Jaccard 均值 0.0263 | gzip率 0.162
 - 首句模板: 唯一率 77.3%, Top1 覆盖 5.3%, Top5 覆盖 12.3%
   - (16x, 5.3%) i notice a strong inclination towards action-packed and immersive gaming experiences in the user's history
   - (8x, 2.7%) i notice a strong inclination towards action-adventure and rpg genres in this user's history particularly with titles li
@@ -181,6 +192,7 @@ the user(807), games that(523), that offer(422), titles that(369), may enjoy(357
 - 完全重复率 0.0% (300/300 篇唯一);
   - 成对余弦(text): 均值 0.1894, 中位 0.1862, p95 0.2697, >0.6 0.0%, >0.8 0.0% | 3-gram Jaccard: 均值 0.0162, >0.5 0.0%
   - 成对余弦(raw): 均值 0.1588, 中位 0.1554, p95 0.2272, >0.6 0.0%, >0.8 0.0% | 3-gram Jaccard: 均值 0.0149, >0.5 0.0%
+- 去停用词对照(text, 仅内容词): 词表 2004 | TTR 0.0669 | distinct-1/2(语料) 0.0669 / 0.4893 | unigram 熵 8.7 bits (归一化 0.794), bigram 熵 12.7 bits (归一化 0.922) | 3-gram Jaccard 均值 0.0053 | gzip率 0.223
 - 首句模板: 唯一率 100.0%, Top1 覆盖 0.3%, Top5 覆盖 1.7%
   - (1x, 0.3%) analyzing the user's interaction history i note the engagement with <sid><sid><sid> which indicates a strong preference 
   - (1x, 0.3%) i notice a clear affinity towards action-adventure and immersive gameplay experiences in the user's history with titles 

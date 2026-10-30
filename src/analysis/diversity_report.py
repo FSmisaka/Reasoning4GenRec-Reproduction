@@ -9,16 +9,19 @@ corpora/*.jsonl), 对每个语料从两个视角统计:
   - raw  视角: 保留 SID token, 反映文档整体(含引用了哪些历史物品)
     的重复程度。
 
-统计项(每个语料 × 两个视角):
+统计项(每个语料 × 两个视角; 词汇类与 gzip/Jaccard 另有去停用词对照版):
   1. 词频分析: TF-IDF(每条思维链一个文档, sublinear tf + smooth idf
      + L2 归一化), 报告平均权重 Top 词; 另给去停用词后的原始词频 Top;
   2. 词汇二元组(bigram)频率 Top;
   3. 词汇多样性: 词表大小 / TTR / 语料级与文档级 distinct-1,2 /
-     unigram, bigram 熵(归一化);
+     unigram, bigram 熵(归一化)——以上均有 含停用词(lexical, 与历史
+     口径一致) 与 去停用词(lexical_content, 仅内容词) 两个版本;
   4. 重复度: 规范化文本的完全重复率; 成对 TF-IDF 余弦相似度
-     (mean/median/p95/max, >0.6, >0.8 占比); 成对词 3-gram Jaccard;
+     (mean/median/p95/max, >0.6, >0.8 占比); 成对词 3-gram Jaccard
+     (duplication.jaccard3 含停用词 / jaccard3_content 去停用词);
   5. 首句模板集中度: 首句(SID/数字泛化后)的 Top 覆盖率与唯一率;
-  6. gzip 压缩率(语料整体, 越低越多样);
+  6. gzip 压缩率(gzip_ratio 原文 / gzip_ratio_content 去停用词拼接;
+     越低越多样);
   7. 最相似样本对示例(按余弦 Top-3, 便于人工核查"套路"长什么样)。
 
 文档数超过 --max-docs 时按 seed 随机采样后再统计; 成对指标再受
@@ -276,6 +279,78 @@ def resolve_device(spec):
 # --------------------------------------------------------------------------
 # 单语料 × 单视角统计
 # --------------------------------------------------------------------------
+def lexical_block(tok_lists):
+    """由 token 列表计算词汇类指标(词表/TTR/distinct/熵),
+    返回 (指标 dict, unigram Counter, bigram Counter)。"""
+    all_tokens = [t for toks in tok_lists for t in toks]
+    all_bigrams = [b for toks in tok_lists for b in bigrams(toks)]
+    uni_counts = Counter(all_tokens)
+    bi_counts = Counter(all_bigrams)
+    total_tokens = len(all_tokens)
+    total_bigrams = len(all_bigrams)
+    vocab_size = len(uni_counts)
+    per_doc_d1 = [
+        len(set(toks)) / len(toks) for toks in tok_lists if toks
+    ]
+    per_doc_d2 = [
+        len(set(bigrams(toks))) / max(len(toks) - 1, 1)
+        for toks in tok_lists
+        if toks
+    ]
+    uni_h, uni_hn = shannon_entropy(uni_counts)
+    bi_h, bi_hn = shannon_entropy(bi_counts)
+    stats = {
+        "vocab_size": vocab_size,
+        "ttr": round(vocab_size / max(total_tokens, 1), 4),
+        "distinct1_corpus": round(
+            len(uni_counts) / max(total_tokens, 1), 4
+        ),
+        "distinct2_corpus": round(
+            len(set(all_bigrams)) / max(total_bigrams, 1), 4
+        ),
+        "distinct1_doc_mean": round(
+            float(np.mean(per_doc_d1)) if per_doc_d1 else 0.0, 4
+        ),
+        "distinct2_doc_mean": round(
+            float(np.mean(per_doc_d2)) if per_doc_d2 else 0.0, 4
+        ),
+        "unigram_entropy_bits": round(uni_h, 3),
+        "unigram_entropy_norm": round(uni_hn, 4),
+        "bigram_entropy_bits": round(bi_h, 3),
+        "bigram_entropy_norm": round(bi_hn, 4),
+    }
+    return stats, uni_counts, bi_counts
+
+
+def jaccard_stats_from_tokens(sub_tok_lists, device):
+    """对给定(子)文档 token 列表计算成对 3-gram Jaccard 统计。
+    GPU 可用时走矩阵乘, 否则 CPU 双循环。"""
+    shingles = []
+    for t in sub_tok_lists:
+        shingles.append(set(zip(t, t[1:], t[2:])) or {("<empty>",)})
+    if device != "cpu":
+        try:
+            return _torch_pairwise_jaccard(shingles, device)
+        except Exception as e:  # OOM / 算子缺失等
+            print(f"[report] GPU Jaccard 失败({e}), 回退 CPU 循环")
+    jacs = []
+    for a in range(len(shingles)):
+        sa = shingles[a]
+        for b in range(a + 1, len(shingles)):
+            sb = shingles[b]
+            union = len(sa | sb)
+            jacs.append(len(sa & sb) / union if union else 1.0)
+    jacs = np.asarray(jacs)
+    return {
+        "n_pairs": int(len(jacs)),
+        "mean": round(float(jacs.mean()), 4),
+        "median": round(float(np.median(jacs)), 4),
+        "p95": round(percentile(jacs, 95), 4),
+        "max": round(float(jacs.max()), 4),
+        "frac_gt_0.5": round(float((jacs > 0.5).mean()), 4),
+    }
+
+
 def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
     """docs: 思维链文本列表。返回指标 dict。"""
     pairs = [
@@ -286,29 +361,17 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
     tok_lists = [t for _, t in pairs]
     n_docs = len(tok_lists)
 
-    all_tokens = [t for toks in tok_lists for t in toks]
-    all_bigrams = [b for toks in tok_lists for b in bigrams(toks)]
-    uni_counts = Counter(all_tokens)
-    bi_counts = Counter(all_bigrams)
-    total_tokens = len(all_tokens)
-    total_bigrams = len(all_bigrams)
-    vocab_size = len(uni_counts)
-
     # 长度
     lengths = [len(t) for t in tok_lists]
     char_lens = [len(d) for d in docs]
 
-    # distinct-n: 语料级 & 文档级均值
-    per_doc_d1 = [
-        len(set(toks)) / len(toks) for toks in tok_lists if toks
+    # 词汇类指标: 全 token(含停用词, 与历史口径一致)
+    lexical, uni_counts, bi_counts = lexical_block(tok_lists)
+    # 词汇类指标: 去停用词(仅内容词)的对照版本
+    content_tok_lists = [
+        [t for t in toks if t not in STOPWORDS] for toks in tok_lists
     ]
-    per_doc_d2 = [
-        len(set(bigrams(toks))) / max(len(toks) - 1, 1) for toks in tok_lists
-    ]
-
-    # 熵
-    uni_h, uni_hn = shannon_entropy(uni_counts)
-    bi_h, bi_hn = shannon_entropy(bi_counts)
+    lexical_content, _, _ = lexical_block(content_tok_lists)
 
     # 词频(去停用词)与 TF-IDF Top 词
     content_counts = Counter(
@@ -331,20 +394,15 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
     dup_rate = 1.0 - n_unique / max(len(docs), 1)
 
     # 成对指标(采样至 pair_cap; TF-IDF 矩阵只在子集上构建)。
-    # device != cpu 时走 torch 矩阵运算(余弦/Jaccard 都是一次矩阵乘),
-    # 失败(OOM 等)自动回退 CPU 路径
+    # 余弦只用全 token 版(停用词承载句式模板信号); Jaccard 报
+    # 全 token 与去停用词双口径
     idx = list(range(n_docs))
     if pair_cap and n_docs > pair_cap:
         idx = rng.sample(idx, pair_cap)
-    cos_stats, jac_stats, top_pairs = {}, {}, []
+    cos_stats, jac_stats, jac_stats_content, top_pairs = {}, {}, {}, []
     if len(idx) >= 2:
-        sub = dense_tfidf_rows([tok_lists[i] for i in idx], idf)
-        shingles = []
-        for i in idx:
-            t = tok_lists[i]
-            shingles.append(
-                set(zip(t, t[1:], t[2:])) or {(t[0],) if t else ()}
-            )
+        sub_toks = [tok_lists[i] for i in idx]
+        sub = dense_tfidf_rows(sub_toks, idf)
         used_gpu = False
         if device != "cpu":
             try:
@@ -353,7 +411,6 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
                 cos_stats, iu_t, sims_t = _torch_pairwise_cosine(
                     sub, device
                 )
-                jac_stats = _torch_pairwise_jaccard(shingles, device)
                 vals, pos = torch.topk(sims_t, min(3, sims_t.numel()))
                 for v, p in zip(vals.tolist(), pos.tolist()):
                     i, j = int(iu_t[0][p]), int(iu_t[1][p])
@@ -382,22 +439,6 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
                 "frac_gt_0.6": round(float((sims > 0.6).mean()), 4),
                 "frac_gt_0.8": round(float((sims > 0.8).mean()), 4),
             }
-            jacs = []
-            for a in range(len(idx)):
-                sa = shingles[a]
-                for b in range(a + 1, len(idx)):
-                    sb = shingles[b]
-                    union = len(sa | sb)
-                    jacs.append(len(sa & sb) / union if union else 1.0)
-            jacs = np.asarray(jacs)
-            jac_stats = {
-                "n_pairs": int(len(jacs)),
-                "mean": round(float(jacs.mean()), 4),
-                "median": round(float(np.median(jacs)), 4),
-                "p95": round(percentile(jacs, 95), 4),
-                "max": round(float(jacs.max()), 4),
-                "frac_gt_0.5": round(float((jacs > 0.5).mean()), 4),
-            }
             # 最相似样本对 Top-3(按余弦)
             pair_order = np.argsort(-sims)[:3]
             for p in pair_order:
@@ -409,6 +450,10 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
                         "b_user_doc": docs[idx[j]][:200],
                     }
                 )
+        jac_stats = jaccard_stats_from_tokens(sub_toks, device)
+        jac_stats_content = jaccard_stats_from_tokens(
+            [content_tok_lists[i] for i in idx], device
+        )
 
     # 首句模板
     openers = [opener_template(d) for d in docs]
@@ -418,10 +463,18 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
         for o, c in opener_counts.most_common(top)
     ]
 
-    # gzip 压缩率
+    # gzip 压缩率: 原文(全词)与去停用词拼接文本双口径
     blob = "\n".join(docs).encode("utf-8")
     gzip_ratio = (
         len(gzip.compress(blob, 9)) / len(blob) if blob else 0.0
+    )
+    content_blob = "\n".join(
+        " ".join(toks) for toks in content_tok_lists
+    ).encode("utf-8")
+    gzip_ratio_content = (
+        len(gzip.compress(content_blob, 9)) / len(content_blob)
+        if content_blob
+        else 0.0
     )
 
     return {
@@ -434,22 +487,8 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
             "words_p95": round(percentile(lengths, 95), 1),
             "chars_mean": round(float(np.mean(char_lens)), 1),
         },
-        "lexical": {
-            "vocab_size": vocab_size,
-            "ttr": round(vocab_size / max(total_tokens, 1), 4),
-            "distinct1_corpus": round(
-                len(uni_counts) / max(total_tokens, 1), 4
-            ),
-            "distinct2_corpus": round(
-                len(set(all_bigrams)) / max(total_bigrams, 1), 4
-            ),
-            "distinct1_doc_mean": round(float(np.mean(per_doc_d1)), 4),
-            "distinct2_doc_mean": round(float(np.mean(per_doc_d2)), 4),
-            "unigram_entropy_bits": round(uni_h, 3),
-            "unigram_entropy_norm": round(uni_hn, 4),
-            "bigram_entropy_bits": round(bi_h, 3),
-            "bigram_entropy_norm": round(bi_hn, 4),
-        },
+        "lexical": lexical,
+        "lexical_content": lexical_content,
         "tfidf_top_terms": tfidf_top,
         "freq_top_terms": freq_top,
         "top_bigrams": bigram_top,
@@ -458,6 +497,7 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
             "n_unique_docs": n_unique,
             "cosine": cos_stats,
             "jaccard3": jac_stats,
+            "jaccard3_content": jac_stats_content,
         },
         "openers": {
             "unique_ratio": round(len(opener_counts) / len(openers), 4),
@@ -468,6 +508,7 @@ def analyze_variant(docs, keep_sid, top, pair_cap, rng, device="cpu"):
             "top": opener_top[:10],
         },
         "gzip_ratio": round(gzip_ratio, 4),
+        "gzip_ratio_content": round(gzip_ratio_content, 4),
         "most_similar_pairs": top_pairs,
     }
 
@@ -479,17 +520,22 @@ def _fmt_pct(x):
     return f"{100 * x:.1f}%"
 
 
-def render_comparison(rows, variant):
+def render_comparison(rows, variant, content=False):
     header = (
         "| 语料 | n | 词数均值 | TTR | dist-2(语料) | 完全重复率 |"
         " 余弦均值 | 余弦p95 | 余弦>0.8 | Jaccard均值 | 首句Top1 |"
         " 首句Top5 | gzip率 |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     )
-    lines = [f"\n### 汇总对比 · {variant} 视角\n\n", header]
+    label = variant + (" · 去停用词" if content else "")
+    lines = [f"\n### 汇总对比 · {label} 视角\n\n", header]
     for name, m in rows:
+        lex = m["lexical_content"] if content else m["lexical"]
+        jac_key = "jaccard3_content" if content else "jaccard3"
+        jac = m["duplication"].get(jac_key, {})
+        gzip_ratio = (
+            m["gzip_ratio_content"] if content else m["gzip_ratio"]
+        )
         cos = m["duplication"]["cosine"]
-        jac = m["duplication"]["jaccard3"]
-        lex = m["lexical"]
         lines.append(
             f"| {name} | {m['n_docs']} | "
             f"{m['length']['words_mean']} | {lex['ttr']:.4f} | "
@@ -500,7 +546,7 @@ def render_comparison(rows, variant):
             f"{jac.get('mean', 0):.4f} | "
             f"{_fmt_pct(m['openers']['top1_frac'])} | "
             f"{_fmt_pct(m['openers']['top5_frac'])} | "
-            f"{m['gzip_ratio']:.3f} |\n"
+            f"{gzip_ratio:.3f} |\n"
         )
     return "".join(lines)
 
@@ -552,6 +598,20 @@ def render_corpus_section(name, res, top_in_md):
                 f"3-gram Jaccard: 均值 {jac.get('mean', 0):.4f}, "
                 f">0.5 {_fmt_pct(jac.get('frac_gt_0.5', 0))}\n"
             )
+    # 去停用词对照(仅内容词; text 视角)
+    lc = text["lexical_content"]
+    jc = text["duplication"].get("jaccard3_content", {})
+    out.append(
+        f"- 去停用词对照(text, 仅内容词): 词表 {lc['vocab_size']} | "
+        f"TTR {lc['ttr']:.4f} | distinct-1/2(语料) "
+        f"{lc['distinct1_corpus']:.4f} / {lc['distinct2_corpus']:.4f} | "
+        f"unigram 熵 {lc['unigram_entropy_bits']:.1f} bits "
+        f"(归一化 {lc['unigram_entropy_norm']:.3f}), "
+        f"bigram 熵 {lc['bigram_entropy_bits']:.1f} bits "
+        f"(归一化 {lc['bigram_entropy_norm']:.3f}) | "
+        f"3-gram Jaccard 均值 {jc.get('mean', 0):.4f} | "
+        f"gzip率 {text.get('gzip_ratio_content', 0):.3f}\n"
+    )
     op = text["openers"]
     out.append(
         f"- 首句模板: 唯一率 {_fmt_pct(op['unique_ratio'])}, "
@@ -745,13 +805,18 @@ def main():
         f"- 关键读法: 成对余弦均值/完全重复率/首句 Top 覆盖越高、"
         f"distinct 与 gzip 率越低, 说明思维链越同质化。\n"
         f"- equalize=on 时各语料已采样到与最小语料相同的篇数"
-        f"(语料级指标才可跨语料对比); 每个语料的采集总量见其小节。\n",
+        f"(语料级指标才可跨语料对比); 每个语料的采集总量见其小节。\n"
+        f"- 词汇类指标/gzip/Jaccard 均有 含停用词(默认) 与 去停用词"
+        f"(仅内容词, *_content / '去停用词' 对照) 两套口径。\n",
     ]
     md.append(render_comparison(
         [(n, results[n]["text"]) for n in results], "text"
     ))
     md.append(render_comparison(
         [(n, results[n]["raw"]) for n in results], "raw"
+    ))
+    md.append(render_comparison(
+        [(n, results[n]["text"]) for n in results], "text", content=True
     ))
     for name in results:
         md.append(render_corpus_section(name, results[name], args.md_top))
