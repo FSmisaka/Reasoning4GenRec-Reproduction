@@ -51,6 +51,7 @@ make games-sidreasoner-rl-beam         # Stage 3 变体: OneRec-Think Rollout-Be
 
 # 挂 tmux 跑:
 make tmux TARGET=games-sidreasoner-sft SESSION=sft
+make tmux TARGET=games-sidreasoner-rl-beam SESSION=rl-beam-games
 tmux ls                                # 1. 列出服务器上仍在跑的会话
 tmux attach -t sft                     # 2. 接回对应会话(Ctrl-b d 只退出查看, 不停任务)
 tmux kill-session -t sft               # 3. 清理会话
@@ -379,8 +380,10 @@ Qwen3 默认 T=0.6, top_p=0.95, top_k=20)或 `SAMPLING=1.0`(指定温度)。
 
 ```bash
 # ① 服务器上(A800, 全量测试集, bf16, 大 batch)生成采样版语料
+#    注意 Stage 3 checkpoint 在 checkpoints/ 下(merge 后的 actor_merged),
+#    不在 runs/ 下; step 数以实际训练为准(先 ls 确认)
 DATASET=games SAMPLING=default NUM=-1 BATCH_SIZE=64 \
-    FORCE=1 MODEL_SPECS="stage2_temp=runs/sidreasoner/Video_Games_stage2_activation/final_checkpoint,stage3_temp=runs/sidreasoner/Video_Games_stage3/actor_merged_1900" \
+    FORCE=1 MODEL_SPECS="stage2_temp=runs/sidreasoner/Video_Games_stage2_activation/final_checkpoint,stage3_temp=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B/global_step_1900/actor_merged" \
     make games-diversity-collect
 # ② 同一套统计, 输出 analysis_temp.json / analysis_temp.md
 #    (corpora 全部参与: teacher + 贪心 stage2/stage3 + 采样 *_temp, 等量化对齐)
@@ -391,6 +394,13 @@ DATASET=games FULL=1 PAIR_CAP=2000 DEVICE=cuda OUT=analysis_temp.json \
 解读: 若 `*_temp` 的首句唯一率/成对余弦明显接近 teacher, 说明先前差距
 有相当部分是"贪心 vs 采样"的解码混杂; 若仍与贪心版接近, 则多样性
 坍缩是模型分布的属性, 与解码温度无关。
+
+- 配套工具 `src/analysis/dup_decomposition.py`: 把首句重复分解为
+  "同用户多余行 vs 跨用户"两种来源(行归属/配对归属双口径),
+  用于检验"重复是否来自同一用户的级联测试行"。对贪心与采样语料
+  各跑一遍即可对比温度的影响:
+  `DATASET=games .venv/bin/python -m src.analysis.dup_decomposition --corpora stage2,stage3,stage2_temp,stage3_temp`
+  (经 --import 导入的语料 user_id 是 #行号, 同用户口径恒为 0, 不适用)
 
 - games 上的初步结论(300 条, seed 42, 三语料同测试用户): stage2 相对
   teacher, TTR 减半(0.024 vs 0.045)、distinct-2 减半(0.139 vs 0.296)、
