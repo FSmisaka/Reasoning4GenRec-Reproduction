@@ -48,10 +48,12 @@ make games-sidreasoner-sft             # Stage 1: 增强式 SID-语言对齐 SFT
 make games-sidreasoner-activation      # Stage 2: 推理激活 SFT
 make games-sidreasoner-rl              # Stage 3: GRPO 强化学习(前置见下)
 make games-sidreasoner-rl-beam         # Stage 3 变体: OneRec-Think Rollout-Beam reward(见下)
+make games-sidreasoner-rl-beam-div     # Stage 3 变体: Rollout-Beam x OneReason R_div(见下)
 
 # 挂 tmux 跑:
 make tmux TARGET=games-sidreasoner-sft SESSION=sft
 make tmux TARGET=games-sidreasoner-rl-beam SESSION=rl-beam-games
+make tmux TARGET=games-sidreasoner-rl-beam-div SESSION=rl-beam-div-games
 tmux ls                                # 1. 列出服务器上仍在跑的会话
 tmux attach -t sft                     # 2. 接回对应会话(Ctrl-b d 只退出查看, 不停任务)
 tmux kill-session -t sft               # 3. 清理会话
@@ -59,6 +61,7 @@ tmux kill-session -t sft               # 3. 清理会话
 # 2) 合并 Stage 3 的 FSDP 分片 checkpoint
 make games-sidreasoner-merge
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam
+make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_div
 
 # 3) 思考模式评估 + 计算指标
 make games-sidreasoner-think \
@@ -203,13 +206,71 @@ class MyReward(BaseSidReward):
 ```
 
 在 `src/reward/sid_rewards/__init__.py` 里 `from . import my_reward` 注册,
-然后把 `config/sidreasoner.py` 的 `rl.reward_kwargs.reward_type` 改为
-`my_reward` 即可, 无需改 rl.sh / trainer。单测:
+保持 `rl.reward` 为 `rollout_beam` 或 `rollout_beam_div`(开 beam 基建并决定
+输出后缀), 再把 `config/sidreasoner.py` 的 `rl.reward_kwargs` 里显式加上
+`"reward_type": "my_reward"`(显式值优先于 rl.sh 的分支默认)即可,
+无需改 rl.sh / trainer。单测:
 
 ```bash
 python -m pytest tests/test_sid_rewards.py -v   # 纯 Python, 无需 GPU/verl
 # venv 里没有 pytest 时: .venv/bin/pip install pytest, 再用 .venv/bin/python -m pytest ...
 ```
+
+## Stage 3 奖励变体二: Rollout-Beam x OneReason R_div(可选)
+
+在 Rollout-Beam 奖励基础上再乘 OneReason(arXiv:2606.06260, Eq.9)的
+**多样性因子 R_div**, 鼓励"一条思维链能带出多个类别的候选":
+
+```text
+R_div(CoT) = max(0, m^(1) - 1) / (K - 1)
+R(CoT)     = R_RolloutBeam(CoT) x R_div(CoT)
+```
+
+其中 K = beam 宽度(该 CoT 的 K 个候选 SID), m^(1) = K 个候选**第 1 层
+code**(如 `<a_*>`)去重后的个数。论文动机: 首层 code 粗粒度决定类别
+("the first sub-token largely determines the subsequent decoding process
+and captures coarse-grained item categories")。R_div 在思维链级别定义
+(同一 CoT 的 K 个候选共享同一因子), 乘法组合与论文 Eq.7 一致; 差异在于
+论文的基础奖励是 0/1 命中指示、K 条候选为并发生成, 我们按实验设计保留
+beam-max 匹配数作为基础奖励。例: K=3, 候选首层为 `<a_1><a_1><a_2>` ->
+m=2, R_div=1/2。
+
+### 终端操作(与 Rollout-Beam 完全同构, 只是 target/后缀不同)
+
+```bash
+# 训练(产物自动加 _rolloutbeam_div 后缀, 与 steprule/_rolloutbeam 互不覆盖)
+make games-sidreasoner-rl-beam-div
+make tmux TARGET=games-sidreasoner-rl-beam-div SESSION=rl-beam-div-games
+
+# 合并 + 评估 + 指标
+make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_div
+make games-sidreasoner-think \
+    MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam_div/global_step_100/actor_merged
+mv results/sidreasoner/Video_Games_think_actor_merged.json \
+   results/sidreasoner/Video_Games_think_beamdiv_step100.json
+make games-sidreasoner-metrics \
+    RESULT=results/sidreasoner/Video_Games_think_beamdiv_step100.json
+
+# 等价手动方式: DATASET=games bash scripts/sidreasoner/rl_beam_div.sh
+#            或 REWARD=rollout_beam_div DATASET=games bash scripts/sidreasoner/rl.sh
+```
+
+前置与 Rollout-Beam 相同(修改版 verl fork + `rl.sid_beam_size > 1`)。
+`rl.reward` 的三个取值 `steprule / rollout_beam / rollout_beam_div` 与三个
+make target 一一对应; 额外参数只有 `rl.reward_kwargs.div_level`(默认 1 =
+首层, 论文设定; 可改 2/3 做层位消融), 其余参数(match_mode/normalize/
+format_reward_weight)与 Rollout-Beam 共享。
+
+### 注意事项(R_div)
+
+- **beam 集中可能压低奖励**: beam search 天然倾向集中, 模型较确定时 K 个
+  候选首层可能全同(m=1 -> R_div=0), 乘法会把该 CoT 奖励压成 0, 甚至组内
+  全零无梯度。对策: 增大 `rl.sid_beam_size`(如 8/16); 用
+  `critic/rewards/mean` 与 rollout_beam 的均值对比定位是命中率低还是多样
+  性低。
+- **三方 A/B**: `rl` / `rl-beam` / `rl-beam-div` 从同一 Stage 2 出发,
+  checkpoint、think 结果按后缀(无 / `_rolloutbeam` / `_rolloutbeam_div`)
+  完全隔离, 可并存对比。
 
 # 4. 自建 SID(独立训练 RQ-VAE)
 

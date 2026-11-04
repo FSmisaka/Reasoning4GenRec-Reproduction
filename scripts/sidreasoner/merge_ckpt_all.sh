@@ -5,8 +5,9 @@
 #       bash scripts/sidreasoner/merge_ckpt_all.sh
 #   CKPT_ROOT 未设置时按 DATASET + 当前 SID 集后缀 + RL_SUFFIX 自动推导:
 #   checkpoints/RecRL_Reasoning/<Category>_stage3_rl_Qwen3-1.7B[_own][RL_SUFFIX]
-#   RL_SUFFIX 用于非默认 reward 的 Stage 3 产物(如 rollout_beam -> _rolloutbeam,
-#   与 rl.sh 的实验名后缀一致; make 命令行变量会自动传入)。
+#   RL_SUFFIX 用于非默认 reward 的 Stage 3 产物(与 rl.sh 实验名后缀一致;
+#   rollout_beam -> _rolloutbeam, rollout_beam_div -> _rolloutbeam_div;
+#   make 命令行变量会自动传入)。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 

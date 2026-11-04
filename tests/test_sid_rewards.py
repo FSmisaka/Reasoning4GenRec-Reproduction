@@ -27,6 +27,10 @@ from src.reward.sid_rewards import (  # noqa: E402
     extract_solution,
     parse_beam_candidates,
 )
+from src.reward.sid_rewards.rollout_beam_div import (  # noqa: E402
+    count_beam_fragments,
+    r_div,
+)
 
 GT = "<a_1><b_2><c_3>"
 
@@ -179,6 +183,109 @@ def test_entry_point_format_bonus_uses_dataset_info(monkeypatch):
     )
     assert score >= 3.0  # beam 3 分 + 可能的 0.1 格式分
     assert score in (3.0, 3.1)
+
+
+# --------------------------------------------------------------------------- #
+# OneReason R_div x Rollout-Beam(src/reward/sid_rewards/rollout_beam_div.py)
+# --------------------------------------------------------------------------- #
+
+
+def make_div_reward(**kwargs):
+    kwargs.setdefault("reward_type", "onereason_div_rollout_beam")
+    return build_sid_reward(kwargs)
+
+
+def join_beams(*sids):
+    # 与 rollout worker 的拼接格式一致: sep = BEAM_SEP + "\n"
+    return (BEAM_SEP + "\n").join(sids)
+
+
+def test_r_div_user_example():
+    # 论文 Eq.9 用例: K=3, 首层 code 为 <a_1>,<a_1>,<a_2> -> 去重数 2 -> R_div = 1/2
+    beams = join_beams("<a_1><b_1><c_1>", "<a_1><b_1><c_2>", "<a_2><b_1><c_1>")
+    assert count_beam_fragments(beams) == 3
+    assert r_div(beams, level=1) == pytest.approx(0.5)
+
+
+def test_r_div_all_same_and_all_distinct():
+    same = join_beams("<a_1><b_1><c_1>", "<a_1><b_2><c_2>", "<a_1><b_3><c_3>", "<a_1><b_4><c_4>")
+    assert r_div(same) == 0.0  # 首层全同 -> 0
+    distinct = join_beams("<a_1><b_1><c_1>", "<a_2><b_1><c_1>", "<a_3><b_1><c_1>", "<a_4><b_1><c_1>")
+    assert r_div(distinct) == 1.0  # 首层全不同 -> 1
+
+
+def test_r_div_counts_empty_fragments_in_k():
+    # 空候选(提取失败)也计入分母 K, 与论文"生成 K 条序列"语义一致
+    beams = "<a_1><b_1><c_1>" + BEAM_SEP + "\n" + BEAM_SEP + "\n<a_2><b_1><c_1>"
+    assert count_beam_fragments(beams) == 3
+    assert r_div(beams) == pytest.approx(0.5)
+
+
+def test_r_div_k_le_one_returns_zero():
+    assert r_div("<a_1><b_1><c_1>") == 0.0
+    assert r_div(None) == 0.0
+
+
+def test_r_div_level_two():
+    beams = join_beams("<a_1><b_1><c_1>", "<a_1><b_2><c_1>", "<a_1><b_2><c_2>")
+    assert r_div(beams, level=1) == 0.0  # 首层全同
+    assert r_div(beams, level=2) == pytest.approx(0.5)  # 第 2 层去重数 2
+
+
+def test_div_reward_multiplies_base():
+    # 基础 Rollout-Beam 奖励(beam max) * R_div
+    beams = join_beams("<a_1><b_2><c_3>", "<a_1><b_2><c_9>", "<a_2><b_1><c_1>")
+    extra = {"beam_search_results": beams}
+    resp = "reasoning </think>\n\n<a_1><b_2><c_3>"
+    # 基础奖励: beam1 全对 = 3; R_div = (2-1)/(3-1) = 0.5 -> 1.5
+    assert make_div_reward().compute("rec/test", resp, GT, extra) == pytest.approx(1.5)
+    # 对照: 不乘 R_div 的原版
+    assert make_reward().compute("rec/test", resp, GT, extra) == 3.0
+
+
+def test_div_reward_zero_when_first_codes_collapse():
+    # beam 首层全同 -> R_div=0 -> 即使 beam 全对奖励也为 0
+    beams = join_beams("<a_1><b_2><c_3>", "<a_1><b_9><c_9>", "<a_1><b_8><c_8>")
+    extra = {"beam_search_results": beams}
+    resp = "r </think>\n\n<a_1><b_2><c_3>"
+    assert make_div_reward().compute("rec/test", resp, GT, extra) == 0.0
+
+
+def test_div_reward_respects_no_think_and_missing_beams():
+    beams = join_beams("<a_1><b_2><c_3>", "<a_2><b_2><c_3>")
+    assert make_div_reward().compute("rec/test", "unfinished", GT, {"beam_search_results": beams}) == 0.0
+    with pytest.raises(RuntimeError, match="sid_beam_size"):
+        make_div_reward().compute("rec/test", "r </think>\n\n<a_1>", GT, {})
+
+
+def test_div_reward_div_level_kwarg():
+    beams = join_beams("<a_1><b_1><c_3>", "<a_1><b_2><c_3>", "<a_1><b_2><c_9>")
+    extra = {"beam_search_results": beams}
+    resp = "r </think>\n\n<a_1><b_1><c_3>"
+    # level=1: 首层全同 -> 0; level=2: 第 2 层去重 2 -> R_div=0.5, 基础奖励 3 -> 1.5
+    assert make_div_reward(div_level=1).compute("rec/test", resp, GT, extra) == 0.0
+    assert make_div_reward(div_level=2).compute("rec/test", resp, GT, extra) == pytest.approx(1.5)
+
+
+def test_div_reward_invalid_div_level_raises():
+    with pytest.raises(ValueError):
+        make_div_reward(div_level=4)
+
+
+def test_entry_point_rollout_beam_div():
+    module = load_entry_module()
+    beams = join_beams("<a_1><b_2><c_3>", "<a_1><b_2><c_9>", "<a_2><b_1><c_1>")
+    extra = {"beam_search_results": beams}
+    resp = "reasoning </think>\n\n<a_1><b_2><c_3>"
+    score = module.rule_base_reward(
+        "rec/test", resp, GT, extra, reward_type="onereason_div_rollout_beam"
+    )
+    assert score == pytest.approx(1.5)
+
+
+def test_registry_has_both_beam_variants():
+    assert "onerec_rollout_beam" in str(build_sid_reward({"reward_type": "onerec_rollout_beam"}).name)
+    assert make_div_reward().name == "onereason_div_rollout_beam"
 
 
 # --------------------------------------------------------------------------- #

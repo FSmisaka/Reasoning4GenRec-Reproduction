@@ -101,12 +101,12 @@ CONFIG: Dict[str, Any] = {
         "save_freq": 100,
         "test_freq": 50,
         # ---- 工程参数(显存/并行, 可按硬件调整; 默认值 = 官方脚本) ----
-        "actor_micro_batch_size_per_gpu": 8,
-        "log_prob_micro_batch_size_per_gpu": 8,  # 同时作用于 rollout 与 ref 两处
+        "actor_micro_batch_size_per_gpu": 16,
+        "log_prob_micro_batch_size_per_gpu": 32,  # 同时作用于 rollout 与 ref 两处
         "actor_param_offload": False,
         "actor_optimizer_offload": False,
         "ref_param_offload": True,
-        "gpu_memory_utilization": 0.8,
+        "gpu_memory_utilization": 0.55,
         "tensor_model_parallel_size": 1,
         "enable_gradient_checkpointing": True,
         "use_remove_padding": True,
@@ -117,16 +117,25 @@ CONFIG: Dict[str, Any] = {
         # rollout_beam: OneRec-Think Rollout-Beam(arXiv:2510.11639 Eq.6-7),
         #   每条 rollout 的 CoT 之后做宽度 K 的 beam search 取 K 个候选 SID,
         #   奖励 = 候选中与 ground truth 匹配 code 数(共 L 层)的最大值。
-        #   需配合修改过的 SIDReasoner verl fork(rollout 侧 beam search 基建)。
+        # rollout_beam_div: 在 rollout_beam 基础上乘 OneReason 多样性因子
+        #   R_div = max(0, m^(1)-1)/(K-1)(arXiv:2606.06260 Eq.9), m^(1) 为
+        #   K 个候选第 1 层 code 去重个数; 实验名自动加 _rolloutbeam_div。
+        #   steprule/rollout_beam/rollout_beam_div 均需修改过的 SIDReasoner
+        #   verl fork(rollout 侧 beam search 基建; steprule 不需要)。
         "reward": "steprule",
-        "sid_beam_size": 4,  # rollout_beam: beam 宽度 K, 必须 >1 才会在 rollout 后做 beam search
-        "sid_length": 3,     # rollout_beam: SID 层数 L(<a_*><b_*><c_*> 为 3)
-        # rollout_beam: 转发给 src/reward/sid_rewards/ 的构造参数:
+        "sid_beam_size": 4,  # rollout_beam*: beam 宽度 K, 必须 >1 才会在 rollout 后做 beam search
+        "sid_length": 3,     # rollout_beam*: SID 层数 L(<a_*><b_*><c_*> 为 3)
+        # rollout_beam*: 转发给 src/reward/sid_rewards/ 的构造参数。
+        # 注意: reward_type 默认由 rl.sh 按 rl.reward 自动下发
+        # (steprule 不发 / rollout_beam -> onerec_rollout_beam /
+        #  rollout_beam_div -> onereason_div_rollout_beam);
+        # 只有接入自定义 reward 变体时才在 reward_kwargs 里显式写
+        # "reward_type": "my_reward"(显式值优先于分支默认), 见 README。
         "reward_kwargs": {
-            "reward_type": "onerec_rollout_beam",
             "match_mode": "position",   # position=论文式逐层比对; prefix=前缀连续匹配(StepRule 式对照)
             "normalize": False,         # 匹配数除以 L, 奖励归一到 [0,1]
             "format_reward_weight": 0.0,  # 采样 SID 合法性的附加格式分(论文无此项, >0 时按 DATASET 自动找 info 文件)
+            "div_level": 1,             # rollout_beam_div: 计算去重的 SID 层(1=首层 <a_*>, OneReason 论文设定)
         },
     },
     "evaluation": {

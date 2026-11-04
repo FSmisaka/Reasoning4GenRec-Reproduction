@@ -120,6 +120,27 @@ class OneRecThinkRolloutBeamReward(BaseSidReward):
     # verl 入口
     # ------------------------------------------------------------------ #
 
+    def _get_beam_results(self, extra_info: dict | None):
+        """取逐 rollout 的 beam 候选; 缺失时按 require_beam_results 决定报错/回退。"""
+        beam_results = (extra_info or {}).get("beam_search_results", None)
+        if beam_results is None:
+            if self.require_beam_results:
+                raise RuntimeError(
+                    "OneRecThinkRolloutBeamReward 需要逐 rollout 的 beam search 结果"
+                    "(extra_info['beam_search_results'])但没有找到。请在 rl.sh 的"
+                    "训练命令里开启 actor_rollout_ref.rollout.sid_beam_size=K(>1) 与"
+                    " actor_rollout_ref.rollout.sid_length=L, 或把"
+                    " rl.reward_kwargs.require_beam_results 设为 False 回退为零奖励。"
+                )
+        return beam_results
+
+    def final_reward(self, beam_results, candidates: list, gt_sids: list, solution_str: str) -> float:
+        """由 beam 候选与 ground truth 计算最终奖励(子类可覆盖以做组合/变换)。"""
+        reward = self.beam_reward(candidates, gt_sids)
+        if self.format_reward_weight > 0:
+            reward += self.format_reward_weight * self.format_reward(solution_str)
+        return float(reward)
+
     def compute(
         self,
         data_source: str,
@@ -131,16 +152,8 @@ class OneRecThinkRolloutBeamReward(BaseSidReward):
         if len(gt_sids) < self.num_sid_levels:
             return 0.0
 
-        beam_results = (extra_info or {}).get("beam_search_results", None)
+        beam_results = self._get_beam_results(extra_info)
         if beam_results is None:
-            if self.require_beam_results:
-                raise RuntimeError(
-                    "OneRecThinkRolloutBeamReward 需要逐 rollout 的 beam search 结果"
-                    "(extra_info['beam_search_results'])但没有找到。请在 rl.sh 的"
-                    "训练命令里开启 actor_rollout_ref.rollout.sid_beam_size=K(>1) 与"
-                    " actor_rollout_ref.rollout.sid_length=L, 或把"
-                    " rl.reward_kwargs.require_beam_results 设为 False 回退为零奖励。"
-                )
             return 0.0
 
         # CoT 未闭合的 rollout, beam 无从落在 SID 上
@@ -148,7 +161,4 @@ class OneRecThinkRolloutBeamReward(BaseSidReward):
             return self.no_think_reward
 
         candidates = parse_beam_candidates(beam_results, num_sid=self.num_sid_levels)
-        reward = self.beam_reward(candidates, gt_sids)
-        if self.format_reward_weight > 0:
-            reward += self.format_reward_weight * self.format_reward(solution_str)
-        return float(reward)
+        return self.final_reward(beam_results, candidates, gt_sids, solution_str)

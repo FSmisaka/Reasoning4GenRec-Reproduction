@@ -8,6 +8,8 @@ config/sidreasoner.py 的 rl.reward + rl.reward_kwargs 选择,
 - ``registry.py``    : ``@register_sid_reward("name")`` 注册器与工厂。
 - ``rollout_beam.py``: OneRec-Think Rollout-Beam reward
   (arXiv:2510.11639, Eq. 6-7)。
+- ``rollout_beam_div.py``: OneReason R_div 多样性因子 x Rollout-Beam
+  (arXiv:2606.06260, Eq. 9)。
 - 新变体             : 继承 ``BaseSidReward``, 加装饰器注册,
   然后 rl.reward_kwargs.reward_type=your_name 切换。
 
@@ -33,6 +35,7 @@ from .registry import (
 
 # 导入 reward 实现以完成注册
 from . import rollout_beam  # noqa: F401
+from . import rollout_beam_div  # noqa: F401
 
 __all__ = [
     "BEAM_SEP",

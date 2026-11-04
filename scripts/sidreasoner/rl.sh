@@ -69,10 +69,13 @@ DATA_DIR=${DATA_DIR:-${ROOT}/rec_reasoning_verl/${CATEGORY}}
 STAGE2_CKPT="runs/sidreasoner/${CATEGORY}_stage2_activation${SID_SUFFIX}/final_checkpoint"
 
 # ---- 奖励选择: REWARD 环境变量 > config rl.reward, 默认 steprule(论文原版) ----
-# rollout_beam = OneRec-Think Rollout-Beam reward(arXiv:2510.11639 Eq.6-7):
-# 每条 rollout 的 CoT 之后由 rollout 侧做宽度 K 的 beam search 取 K 个候选
-# SID, 奖励 = 候选中匹配 ground truth 的 code 数(L 层)的最大值。
-# 输出目录自动加 _rolloutbeam 后缀, 与 steprule 的产物互不覆盖。
+# rollout_beam   = OneRec-Think Rollout-Beam(arXiv:2510.11639 Eq.6-7):
+#   每条 rollout 的 CoT 之后由 rollout 侧做宽度 K 的 beam search 取 K 个候选
+#   SID, 奖励 = 候选中匹配 ground truth 的 code 数(L 层)的最大值。
+# rollout_beam_div = 在 rollout_beam 基础上乘 OneReason 多样性因子
+#   R_div = max(0, m^(1)-1)/(K-1)(arXiv:2606.06260 Eq.9), m^(1) 为 K 个候选
+#   第 1 层 code 去重个数。
+# 两者输出目录分别加 _rolloutbeam / _rolloutbeam_div 后缀, 产物互不覆盖。
 REWARD=${REWARD:-$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['rl'].get('reward', 'steprule') or 'steprule')")}
 REWARD_SUFFIX=""
 REWARD_FLAGS=""
@@ -80,18 +83,30 @@ case "${REWARD}" in
   steprule)
     REWARD_PATH="$(pwd)/src/reward/direct_recommendation_steprule.py"
     ;;
-  rollout_beam)
+  rollout_beam|rollout_beam_div)
     REWARD_PATH="$(pwd)/src/reward/direct_recommendation_rolloutbeam.py"
     SID_BEAM=$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['rl'].get('sid_beam_size', 4))")
     SID_LEN=$(${PY} -c "from config import load_config; print(load_config('sidreasoner')['rl'].get('sid_length', 3))")
     if [[ "${SID_BEAM}" -le 1 ]]; then
-        echo "错误: reward=rollout_beam 要求 rl.sid_beam_size > 1(当前 ${SID_BEAM})。" >&2
+        echo "错误: reward=${REWARD} 要求 rl.sid_beam_size > 1(当前 ${SID_BEAM})。" >&2
         echo "      否则 rollout 侧不做 beam search, 奖励将恒为 0。请改 config/sidreasoner.py。" >&2
         exit 1
     fi
+    case "${REWARD}" in
+      rollout_beam)
+        REWARD_TYPE="onerec_rollout_beam"
+        REWARD_SUFFIX="_rolloutbeam"
+        ;;
+      rollout_beam_div)
+        REWARD_TYPE="onereason_div_rollout_beam"
+        REWARD_SUFFIX="_rolloutbeam_div"
+        ;;
+    esac
     REWARD_FLAGS="actor_rollout_ref.rollout.sid_beam_size=${SID_BEAM} actor_rollout_ref.rollout.sid_length=${SID_LEN}"
     # reward_kwargs 在 verl 配置里是空 dict, Hydra struct 模式禁止直接新增键,
-    # 必须带 '+' 前缀追加(+custom_reward_function.reward_kwargs.xxx=...)
+    # 必须带 '+' 前缀追加(+custom_reward_function.reward_kwargs.xxx=...)。
+    # config 的 reward_kwargs.reward_type 若有值则以它为准(自定义 reward 入口),
+    # 否则用 rl.reward 分支的默认实现。
     REWARD_FLAGS="${REWARD_FLAGS} $(${PY} - <<'EOF' | tr '\n' ' '
 from config import load_config
 rk = load_config("sidreasoner")["rl"].get("reward_kwargs", {}) or {}
@@ -100,11 +115,13 @@ for k, v in rk.items():
     print(f"+custom_reward_function.reward_kwargs.{k}={v}")
 EOF
 )"
-    REWARD_SUFFIX="_rolloutbeam"
+    if [[ "${REWARD_FLAGS}" != *"reward_kwargs.reward_type="* ]]; then
+        REWARD_FLAGS="${REWARD_FLAGS} +custom_reward_function.reward_kwargs.reward_type=${REWARD_TYPE}"
+    fi
     ;;
   *)
-    echo "错误: 未知 rl.reward='${REWARD}', 可选: steprule | rollout_beam" >&2
-    echo "      (或直接用 scripts/sidreasoner/rl_beam.sh / make <dataset>-sidreasoner-rl-beam)" >&2
+    echo "错误: 未知 rl.reward='${REWARD}', 可选: steprule | rollout_beam | rollout_beam_div" >&2
+    echo "      (或直接用 scripts/sidreasoner/rl_beam*.sh / make <dataset>-sidreasoner-rl-beam[-div])" >&2
     exit 1
     ;;
 esac
