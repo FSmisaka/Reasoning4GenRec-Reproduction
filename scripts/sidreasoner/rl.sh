@@ -129,6 +129,8 @@ esac
 EXPERIMENT_NAME="${CATEGORY}_stage3_rl_Qwen3-1.7B${SID_SUFFIX}${REWARD_SUFFIX}"
 
 export PYTHONPATH="${VERL_HOME}:${PYTHONPATH:-}"
+# 单卡训练显存吃紧时缓解 PyTorch 显存碎片(rollout 已设 enforce_eager=True, 无 CUDA graph 冲突)
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 mkdir -p ./logs
 
 ${PY} -m verl.trainer.main_ppo \

@@ -81,7 +81,7 @@ CONFIG: Dict[str, Any] = {
     },
     "rl": {
         "verl_home": "../SIDReasoner",
-        "use_wandb": True,
+        "use_wandb": False,
         "n_gpus_per_node": 4,  # 实际卡数由 rl.sh 按所选 GPU 自动判定, 此项不生效
         "nnodes": 1,
         # ---- 算法超参(默认值 = 官方 RL_training_script.sh) ----
@@ -101,12 +101,12 @@ CONFIG: Dict[str, Any] = {
         "save_freq": 100,
         "test_freq": 50,
         # ---- 工程参数(显存/并行, 可按硬件调整; 默认值 = 官方脚本) ----
-        "actor_micro_batch_size_per_gpu": 16,
-        "log_prob_micro_batch_size_per_gpu": 32,  # 同时作用于 rollout 与 ref 两处
+        "actor_micro_batch_size_per_gpu": 32,
+        "log_prob_micro_batch_size_per_gpu": 64,  # 同时作用于 rollout 与 ref 两处(纯前向, 不影响反向峰值)
         "actor_param_offload": False,
         "actor_optimizer_offload": False,
         "ref_param_offload": True,
-        "gpu_memory_utilization": 0.55,
+        "gpu_memory_utilization": 0.50,
         "tensor_model_parallel_size": 1,
         "enable_gradient_checkpointing": True,
         "use_remove_padding": True,
@@ -150,5 +150,14 @@ CONFIG: Dict[str, Any] = {
         "think_eval_model": None,
         "think_batch_size": 4,
         "k_list": [1, 5, 10],
+        # ---- 思考模式(CoT)解码设置(参考 OneRec-Think 官方 Stage 评测脚本
+        # test/eval_parallel_8gpu_cot.sh: --think_temperature 1.5 --think_top_p 0.95) ----
+        # think_temperature > 0 时 CoT 用采样解码(vLLM per-request seed 可复现),
+        # 并按 eval_seeds 逐 seed 评测后报告均值/标准差/95% 置信区间;
+        # 0.0 保持原贪心解码行为(单 seed, 输出文件名不带 _seed 后缀)。
+        "think_temperature": 1.5,
+        "think_top_p": 0.95,
+        "eval_seeds": [42, 43, 44, 45, 46],
+        "ci_level": 0.95,
     },
 }

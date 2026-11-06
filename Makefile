@@ -9,9 +9,12 @@ PIP_FLAGS := $(if $(PIP_INDEX_URL),--index-url "$(PIP_INDEX_URL)",)
 # 用户手动指定的 GPU(为空表示未指定)。SIDReasoner 的多卡脚本
 # 据此区分: 非空则严格使用指定卡, 为空则自动挑选空闲卡。
 SIDR_GPUS := $(CUDA_VISIBLE_DEVICES)
-# 仅当 CUDA_VISIBLE_DEVICES 来自 make 命令行时才向 tmux 内层转发
-# (外层 make 自动选中的单卡不算显式指定)
-CVD_CMDLINE := $(if $(filter command line,$(origin CUDA_VISIBLE_DEVICES)),$(CUDA_VISIBLE_DEVICES),)
+# 仅当 CUDA_VISIBLE_DEVICES 由用户显式设置时才向 tmux 内层转发
+# (shell 前缀 CUDA_VISIBLE_DEVICES=0 make ... 的 origin 是 environment,
+#  make 参数 make ... CUDA_VISIBLE_DEVICES=0 的 origin 是 command line;
+#  两者都算显式指定。本 Makefile 自动选卡后 export 的值 origin 为 file,
+#  不会被误判为显式指定)
+CVD_CMDLINE := $(if $(filter environment command line,$(origin CUDA_VISIBLE_DEVICES)),$(CUDA_VISIBLE_DEVICES),)
 
 ifdef CUDA_VISIBLE_DEVICES
 GPU := $(CUDA_VISIBLE_DEVICES)

@@ -72,6 +72,30 @@ make games-sidreasoner-metrics         # 自动取最新 *_think_*.json, 可用 
 make games-sidreasoner-eval MODEL=stage2
 ```
 
+## 思考模式评估: 采样解码 + 多 seed 指标(默认)
+
+`config/sidreasoner.py` 的 `evaluation` 段控制 CoT 解码方式:
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `think_temperature` | `1.5` | CoT 采样温度(OneRec-Think 官方 Stage 评测 `eval_parallel_8gpu_cot.sh` 的 `--think_temperature 1.5 --think_top_p 0.95`); **`0.0` 恢复原贪心解码** |
+| `think_top_p` | `0.95` | CoT 采样 top-p(温度>0 时生效) |
+| `eval_seeds` | `[42,43,44,45,46]` | 固定 5 个随机种子, 逐 seed 评测(vLLM per-request seed, 可复现) |
+| `ci_level` | `0.95` | 置信区间水平 |
+
+温度>0 时: SID beam 阶段仍为确定性约束束搜索, 随机性仅来自 CoT 采样;
+每个 seed 输出 `results/sidreasoner/<C>_think_<模型>_seed<seed>.json`,
+汇总输出 `<C>_think_<模型>_summary.json`(每个 NDCG@K / HR@K 的
+均值、样本标准差、95% 置信区间[t 分布, n=5 时 t=2.776]), 终端同步打印。
+
+```bash
+make games-sidreasoner-metrics   # summary 生成后自动打印聚合表
+
+# 也可手动对多份单 seed 结果聚合(如分开跑/分开传文件):
+DATASET=games .venv/bin/python -m src.eval.sidreasoner_metrics aggregate \
+    --path results/sidreasoner/Video_Games_think_x_seed42.json,...,seed8888.json
+```
+
 ## 把玩 (终端对话)
 
 ```bash

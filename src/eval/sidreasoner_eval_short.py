@@ -73,8 +73,14 @@ def run(mode, test_path, category, fname, max_len):
     info_file = os.path.join(
         cfg["data"]["root"], "info", fname.rsplit(".", 1)[0] + ".txt"
     )
-    print(f"\n[short:{mode}] 指标({result}):")
-    calc(result, info_file)
+    # 多 seed 采样评测时产物为 <prefix>_seed<seed>.json + <prefix>_summary.json
+    to_calc = result
+    if not os.path.exists(to_calc):
+        cand = result.rsplit(".", 1)[0] + "_summary.json"
+        if os.path.exists(cand):
+            to_calc = cand
+    print(f"\n[short:{mode}] 指标({to_calc}):")
+    calc(to_calc, info_file)
 
 
 def main_cli():

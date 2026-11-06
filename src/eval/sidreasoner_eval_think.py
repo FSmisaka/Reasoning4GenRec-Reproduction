@@ -5,9 +5,18 @@ SIDReasoner 评估(思考模式)
 先用 vLLM 生成思维链(截断到 </think>), 再用 trie 约束束搜索
 生成 SID。需要安装 vllm。
 
+CoT 解码温度可配置(OneRec-Think 官方 Stage 评测用
+think_temperature=1.5 / think_top_p=0.95 采样生成思维链):
+- think_temperature > 0: 采样解码, 按 evaluation.eval_seeds 逐 seed
+  评测(vLLM per-request seed 保证可复现), 每 seed 输出
+  <C>_think_<model>_seed<seed>.json, 最后汇总
+  <C>_think_<model>_summary.json(各指标 mean/std/95% CI)。
+- think_temperature == 0: 原贪心解码行为不变(单 seed, 文件名无 _seed)。
+
 启动: DATASET=games .venv/bin/python -m src.eval.sidreasoner_eval_think
 """
 
+import copy
 import json
 import os
 
@@ -16,8 +25,19 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from config import load_config
 from src.data.sidreasoner_data import Reasoning_Eval_Dataset
+from src.eval.sidreasoner_metrics import (
+    aggregate_metrics,
+    compute_metrics,
+    print_aggregate,
+)
 from src.models.sidreasoner import category_phrase
 from src.train.common import resolve_category
+
+# 含 opencv 的 venv 里, vLLM v1 引擎 spawn 的子进程 re-import 入口模块时会触发
+# cv2/typing 遮蔽标准库 typing 的崩溃(Engine core initialization failed)。
+# 改为进程内运行引擎彻底绕开; 需要多进程时可用环境变量
+# VLLM_ENABLE_V1_MULTIPROCESSING=1 显式覆盖。
+os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 
 
 def get_hash(x):
@@ -74,6 +94,19 @@ def main(
             "(如 make games-sidreasoner-think MODEL=...)或 config 的 "
             "evaluation.think_eval_model 指定"
         )
+
+    # ---- 解码设置(采样 vs 贪心) ----
+    think_temperature = float(eval_cfg.get("think_temperature", 0.0))
+    think_top_p = float(eval_cfg.get("think_top_p", 0.95))
+    ci_level = float(eval_cfg.get("ci_level", 0.95))
+    if think_temperature > 0:
+        seeds = list(eval_cfg.get("eval_seeds", [42, 43, 44, 45, 46]))
+        multi_seed = True
+    else:
+        # 贪心解码确定, 退化为单 seed 旧行为
+        seeds = [eval_cfg.get("seed", 42)]
+        multi_seed = False
+
     if result_json_data is None:
         from src.data.sid_switch import sid_suffix
 
@@ -83,10 +116,9 @@ def main(
             "results", "sidreasoner",
             f"{category}_think_{model_label}{sid_suffix(data_cfg)}.json",
         )
+    result_prefix, result_ext = os.path.splitext(result_json_data)
 
     os.environ.setdefault("FLASH_ATTENTION", "1")
-    seed = eval_cfg.get("seed", 42)
-    set_seed(seed)
     phrase = category_phrase(category)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -173,10 +205,11 @@ def main(
         max_len=2048,
         category=phrase,
         test=True,
-        seed=seed,
+        seed=seeds[0],
     )
     encodings = [val_dataset[i] for i in range(len(val_dataset))]
-    test_data = val_dataset.get_all()
+    # 每个 seed 复用的干净副本(beam search 前会被 CoT 覆写)
+    raw_encodings = copy.deepcopy(encodings)
 
     model.config.pad_token_id = model.config.eos_token_id = (
         tokenizer.eos_token_id
@@ -185,11 +218,17 @@ def main(
 
     from vllm import SamplingParams
 
-    sampling_params = SamplingParams(
-        max_tokens=eval_cfg.get("think_max_new_tokens", 256),
-        temperature=0.0,
-        skip_special_tokens=False,
-    )
+    def make_sampling_params(seed):
+        # OneRec-Think 官方 CoT 评测: temperature=1.5, top_p=0.95(采样);
+        # temperature=0 时 vLLM 即贪心解码, 与原实现一致
+        kwargs = dict(
+            max_tokens=eval_cfg.get("think_max_new_tokens", 256),
+            temperature=think_temperature,
+            skip_special_tokens=False,
+        )
+        if think_temperature > 0:
+            kwargs.update(top_p=think_top_p, seed=seed)
+        return SamplingParams(**kwargs)
 
     num_beams = eval_cfg["num_beams"]
     max_new_tokens = eval_cfg.get("max_new_tokens", 1024)
@@ -243,62 +282,126 @@ def main(
     prompts = tokenizer.batch_decode(
         [_["input_ids"] for _ in encodings], skip_special_tokens=False
     )
-    with torch.no_grad():
-        outputs = llm.generate(prompts, sampling_params)
-    raw_cots = [cot.outputs[0].text.strip() for cot in outputs]
-    close_found = ["</think>" in c for c in raw_cots]
-    cots = [c[: c.find("</think>")].strip() for c in raw_cots]
-    prompt_cot = [
-        prompt + cot.outputs[0].text.strip()
-        for prompt, cot in zip(prompts, outputs)
-    ]
-    prompt_cot = [
-        text[: text.find("</think>")].strip() + "\n</think>\n\n"
-        for text in prompt_cot
-    ]
-    for i in range(len(encodings)):
-        reasoning_output = tokenizer(
-            prompt_cot[i],
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=2560,
+
+    # ---- 第 1 阶段: vLLM 采样生成各 seed 的 CoT ----
+    cots_by_seed = {}
+    for seed in seeds:
+        set_seed(seed)
+        with torch.no_grad():
+            outputs = llm.generate(prompts, make_sampling_params(seed))
+        raw_cots = [cot.outputs[0].text.strip() for cot in outputs]
+        close_found = ["</think>" in c for c in raw_cots]
+        cots = [c[: c.find("</think>")].strip() for c in raw_cots]
+        prompt_cot = [
+            prompt + cot.outputs[0].text.strip()
+            for prompt, cot in zip(prompts, outputs)
+        ]
+        prompt_cot = [
+            text[: text.find("</think>")].strip() + "\n</think>\n\n"
+            for text in prompt_cot
+        ]
+        cots_by_seed[seed] = {
+            "raw_cots": raw_cots,
+            "close_found": close_found,
+            "cots": cots,
+            "prompt_cot": prompt_cot,
+        }
+        print(
+            f"[eval] seed={seed}: CoT 生成完成"
+            f"({sum(close_found)}/{len(close_found)} 含 </think>)"
         )
-        encodings[i]["input_ids"] = reasoning_output["input_ids"][0].tolist()
-        encodings[i]["attention_mask"] = reasoning_output["attention_mask"][
-            0
-        ].tolist()
     del llm
 
-    blocks = [
-        encodings[i * batch_size : (i + 1) * batch_size]
-        for i in range((len(encodings) + batch_size - 1) // batch_size)
-    ]
-
+    # ---- 第 2 阶段: 逐 seed 做 trie 约束 beam search + 指标 ----
     from tqdm import tqdm
 
-    outputs = []
-    for enc in tqdm(
-        blocks, desc="Generating reasoning trajectories and items..."
-    ):
-        outputs = outputs + evaluate(enc)
+    per_seed_metrics = {}
+    for seed in seeds:
+        bundle = cots_by_seed[seed]
+        encodings = copy.deepcopy(raw_encodings)
+        for i in range(len(encodings)):
+            reasoning_output = tokenizer(
+                bundle["prompt_cot"][i],
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=2560,
+            )
+            encodings[i]["input_ids"] = reasoning_output["input_ids"][
+                0
+            ].tolist()
+            encodings[i]["attention_mask"] = reasoning_output[
+                "attention_mask"
+            ][0].tolist()
 
-    for i, test in enumerate(test_data):
-        test["prompt_cot"] = prompt_cot[i]
-        test["predict"] = outputs[i]
-        test["cot"] = cots[i]
-        test["cot_len"] = len(
-            tokenizer(cots[i], add_special_tokens=False)["input_ids"]
+        blocks = [
+            encodings[i * batch_size : (i + 1) * batch_size]
+            for i in range(
+                (len(encodings) + batch_size - 1) // batch_size
+            )
+        ]
+        outputs = []
+        for enc in tqdm(
+            blocks,
+            desc=f"Generating reasoning trajectories and items (seed={seed})",
+        ):
+            outputs = outputs + evaluate(enc)
+
+        test_data = val_dataset.get_all()
+        for i, test in enumerate(test_data):
+            test["prompt_cot"] = bundle["prompt_cot"][i]
+            test["predict"] = outputs[i]
+            test["cot"] = bundle["cots"][i]
+            test["cot_len"] = len(
+                tokenizer(
+                    bundle["cots"][i], add_special_tokens=False
+                )["input_ids"]
+            )
+            test["close_found"] = bundle["close_found"][i]
+        for i in range(len(test_data)):
+            if "dedup" in test_data[i]:
+                test_data[i].pop("dedup")
+
+        seed_json = (
+            f"{result_prefix}_seed{seed}{result_ext}"
+            if multi_seed
+            else result_json_data
         )
-        test["close_found"] = close_found[i]
-    for i in range(len(test_data)):
-        if "dedup" in test_data[i]:
-            test_data[i].pop("dedup")
+        os.makedirs(os.path.dirname(seed_json), exist_ok=True)
+        with open(seed_json, "w") as f:
+            json.dump(test_data, f, indent=4)
+        print(f"[eval] results saved to {seed_json}")
 
-    os.makedirs(os.path.dirname(result_json_data), exist_ok=True)
-    with open(result_json_data, "w") as f:
-        json.dump(test_data, f, indent=4)
-    print(f"[eval] results saved to {result_json_data}")
+        per_seed_metrics[seed] = compute_metrics(test_data, semantic_ids)
+        shown = {
+            k: round(v, 6)
+            for k, v in per_seed_metrics[seed].items()
+            if k.startswith(("NDCG@", "HR@"))
+        }
+        print(f"[eval] seed={seed} metrics: {shown}")
+
+    # ---- 第 3 阶段: 跨 seed 聚合(mean / std / 95% CI) ----
+    if multi_seed:
+        agg = aggregate_metrics(per_seed_metrics, ci_level=ci_level)
+        summary = {
+            "model": base_model,
+            "category": category,
+            "decoding": {
+                "think_temperature": think_temperature,
+                "think_top_p": think_top_p,
+                "max_tokens": eval_cfg.get("think_max_new_tokens", 256),
+                "num_beams": num_beams,
+            },
+            "seeds": seeds,
+            "ci_level": ci_level,
+            "per_seed": per_seed_metrics,
+            "aggregate": agg,
+        }
+        summary_json = f"{result_prefix}_summary{result_ext}"
+        with open(summary_json, "w") as f:
+            json.dump(summary, f, indent=4)
+        print(f"[eval] multi-seed summary saved to {summary_json}")
+        print_aggregate(agg, title=f"{category} think eval")
 
 
 if __name__ == "__main__":
