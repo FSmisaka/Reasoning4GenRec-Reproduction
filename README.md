@@ -109,11 +109,14 @@ results/sidreasoner/
 | `think_top_p` | `0.95` | CoT 采样 top-p(温度>0 时生效) |
 | `eval_seeds` | `[42,43,44,45,46]` | 固定 5 个随机种子, 逐 seed 评测(vLLM per-request seed, 可复现) |
 | `ci_level` | `0.95` | 置信区间水平 |
+| `save_per_seed_results` | `False` | 多 seed 评测是否额外写单 seed 明细文件(默认只写 summary) |
 
 温度>0 时: SID beam 阶段仍为确定性约束束搜索, 随机性仅来自 CoT 采样;
-每个 seed 输出 `results/sidreasoner/<Dataset>/think_<变体>_temp/step_N_seed<seed>.json`,
-汇总输出 `step_N_summary.json`(每个 NDCG@K / HR@K 的
-均值、样本标准差、95% 置信区间[t 分布, n=5 时 t=2.776]), 终端同步打印。
+**默认只输出** `results/sidreasoner/<C>_think_<模型>_summary.json`
+(每个 NDCG@K / HR@K 的均值、样本标准差、95% 置信区间[t 分布,
+n=5 时 t=2.776], 并含逐 seed 明细), 终端同步打印; 不再写单 seed
+明细文件(需要其 `predict`/`cot` 字段做多样性分析等导入时, 把
+`evaluation.save_per_seed_results` 置 `true`)。
 
 ```bash
 make games-sidreasoner-metrics   # summary 生成后自动打印聚合表

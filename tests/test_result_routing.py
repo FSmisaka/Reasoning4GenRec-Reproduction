@@ -94,14 +94,27 @@ def test_organize_classify():
     import organize_results as org
 
     f = org.classify
+    # 1) final_result_<C>.<label>.json(非思考, 手动重命名, 点分隔)
+    assert f("final_result_Video_Games.stage1.json") == ("Games", "nonthink/stage1.json")
+    assert f("final_result_Video_Games.stage3_step800.json") == ("Games", "nonthink/step_800.json")
+    # 旧默认命名(无模型信息)
     assert f("final_result_Video_Games.json") == ("Games", "nonthink/legacy.json")
     assert f("final_result_Video_Games_own.json") == ("Games", "nonthink/legacy_own.json")
+    # 2) le3 双模式
+    assert f("Video_Games_le3_eval_actor_merged.json") == ("Games", "le3/eval_actor_merged.json")
+    assert f("Video_Games_le3_think_stage3_step100.json") == ("Games", "le3/think_step_100.json")
+    # 3) 温度采样: 单 seed(旧默认) 与手动重命名的 summary
+    assert f("Video_Games_think_actor_merged_seed42.json") == ("Games", "think_steprule_temp/actor_merged_seed42.json")
+    assert f("Video_Games_think_stage3_temp_step1900.json") == ("Games", "think_steprule_temp/step_1900_summary.json")
+    assert f("Video_Games_think_actor_merged_summary.json") == ("Games", "think_steprule_temp/actor_merged_summary.json")
+    # 4) 贪心思考模式: stageX_stepN 标签
+    assert f("Video_Games_think_stage3_step100.json") == ("Games", "think_steprule/step_100.json")
+    assert f("Video_Games_think_stage2.json") == ("Games", "think_steprule/stage2.json")
+    # 旧默认贪心命名 + own 后缀
     assert f("Video_Games_think_actor_merged.json") == ("Games", "think_steprule/actor_merged.json")
     assert f("Video_Games_think_actor_merged_own.json") == ("Games", "think_steprule/actor_merged_own.json")
-    assert f("Video_Games_think_actor_merged_seed42.json") == ("Games", "think_steprule_temp/actor_merged_seed42.json")
-    assert f("Video_Games_think_actor_merged_summary.json") == ("Games", "think_steprule_temp/actor_merged_summary.json")
-    assert f("Video_Games_le3_eval_stage2.json") == ("Games", "le3/eval_stage2.json")
-    assert f("Video_Games_le3_think_actor_merged.json") == ("Games", "le3/think_actor_merged.json")
+    assert f("Video_Games_think_actor_merged_own_seed42.json") == ("Games", "think_steprule_temp/actor_merged_own_seed42.json")
+    # 非思考旧默认命名
     assert f("Office_Products_stage2.json") == ("Office", "nonthink/stage2.json")
     assert f("unrelated.json") is None
 

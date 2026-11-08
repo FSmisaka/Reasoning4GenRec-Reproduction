@@ -159,5 +159,9 @@ CONFIG: Dict[str, Any] = {
         "think_top_p": 0.95,
         "eval_seeds": [42, 43, 44, 45, 46],
         "ci_level": 0.95,
+        # 多 seed 评测默认只写 *_summary.json(已含逐 seed 指标);
+        # 需要单 seed 明细文件(含 predict/cot 字段, 供多样性分析等
+        # 导入)时置 True, 会额外写 <前缀>_seed<seed>.json
+        "save_per_seed_results": False,
     },
 }

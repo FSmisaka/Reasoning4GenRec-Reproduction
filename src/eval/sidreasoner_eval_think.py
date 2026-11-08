@@ -8,9 +8,10 @@ SIDReasoner 评估(思考模式)
 CoT 解码温度可配置(OneRec-Think 官方 Stage 评测用
 think_temperature=1.5 / think_top_p=0.95 采样生成思维链):
 - think_temperature > 0: 采样解码, 按 evaluation.eval_seeds 逐 seed
-  评测(vLLM per-request seed 保证可复现), 每 seed 输出
-  <C>_think_<model>_seed<seed>.json, 最后汇总
-  <C>_think_<model>_summary.json(各指标 mean/std/95% CI)。
+  评测(vLLM per-request seed 保证可复现), 各 seed 指标在进程内计算,
+  最终汇总输出 <C>_think_<model>_summary.json(各指标 mean/std/95% CI,
+  含逐 seed 明细)。默认不再写单 seed 明细文件, 需要 cot 字段做
+  多样性分析等用途时设 evaluation.save_per_seed_results: true。
 - think_temperature == 0: 原贪心解码行为不变(单 seed, 文件名无 _seed)。
 
 启动: DATASET=games .venv/bin/python -m src.eval.sidreasoner_eval_think
@@ -106,6 +107,11 @@ def main(
         # 贪心解码确定, 退化为单 seed 旧行为
         seeds = [eval_cfg.get("seed", 42)]
         multi_seed = False
+    # 多 seed 模式默认只写 summary(已含逐 seed 指标);
+    # 需要单 seed 明细(如多样性分析导入 cot)时置 true
+    save_per_seed = multi_seed and bool(
+        eval_cfg.get("save_per_seed_results", False)
+    )
 
     if result_json_data is None:
         from src.data.sid_switch import sid_suffix
@@ -365,15 +371,17 @@ def main(
             if "dedup" in test_data[i]:
                 test_data[i].pop("dedup")
 
-        seed_json = (
-            f"{result_prefix}_seed{seed}{result_ext}"
-            if multi_seed
-            else result_json_data
-        )
-        os.makedirs(os.path.dirname(seed_json), exist_ok=True)
-        with open(seed_json, "w") as f:
-            json.dump(test_data, f, indent=4)
-        print(f"[eval] results saved to {seed_json}")
+        if save_per_seed:
+            seed_json = f"{result_prefix}_seed{seed}{result_ext}"
+            os.makedirs(os.path.dirname(seed_json), exist_ok=True)
+            with open(seed_json, "w") as f:
+                json.dump(test_data, f, indent=4)
+            print(f"[eval] results saved to {seed_json}")
+        elif not multi_seed:
+            os.makedirs(os.path.dirname(result_json_data), exist_ok=True)
+            with open(result_json_data, "w") as f:
+                json.dump(test_data, f, indent=4)
+            print(f"[eval] results saved to {result_json_data}")
 
         per_seed_metrics[seed] = compute_metrics(test_data, semantic_ids)
         shown = {
