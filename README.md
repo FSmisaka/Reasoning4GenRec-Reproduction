@@ -66,11 +66,38 @@ make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_div
 # 3) 思考模式评估 + 计算指标
 make games-sidreasoner-think \
     MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B/global_step_100/actor_merged
-make games-sidreasoner-metrics         # 自动取最新 *_think_*.json, 可用 RESULT=xxx.json 指定
+make games-sidreasoner-metrics         # 自动取最新 think 结果, 可用 RESULT=xxx.json 指定
 
 # 非思考模式: MODEL 取 stage1 / stage2 / 任意 checkpoint 路径
 make games-sidreasoner-eval MODEL=stage2
 ```
+
+## 评测结果目录结构(两级路由)
+
+所有评测结果按 **数据集 x 评测类型** 自动路由到
+`results/sidreasoner/<Dataset>/<variant>/` 下, 文件名只含 step 数
+(从 MODEL 路径的 `global_step_N` 提取; stage1/stage2 checkpoint 用
+`stage1`/`stage2`)+ 可选的 `_own`(自建 SID)/`_seed<S>`/`_summary` 后缀:
+
+```
+results/sidreasoner/
+  Games/  Office/  Industrial/          <- 第一层: 数据集
+    nonthink/               step_100.json            # 非思考模式(eval.sh)
+    le3/                    eval_stage2.json         # 短历史(<=3)子集,
+                            think_stage2.json       #   eval/think 双模式对照
+    think_steprule/         step_100.json            # 原始 Stage3(StepRule)思考模式
+    think_rolloutbeam/      step_900.json            # Rollout-Beam reward 思考模式
+    think_rolloutbeam_div/  step_1500.json           # + OneReason R_div 思考模式
+    think_steprule_temp/    step_100_seed42.json     # 原始思考模式+采样温度(>0)
+                            step_100_summary.json    #   多 seed 汇总
+```
+
+- **变体自动推断**: 从 MODEL 路径的实验名后缀识别
+  (`_rolloutbeam` / `_rolloutbeam_div` / 无后缀=steprule; stage1/2 也归
+  steprule 系); 温度>0 时自动落到 `think_<变体>_temp`。
+- **存量文件一键归档**: `make sidreasoner-organize`(先 `DRY_RUN=1`
+  预览); 旧 think 文件默认归 `think_steprule`, 确知来自 beam 模型的
+  请手动挪到对应目录。
 
 ## 思考模式评估: 采样解码 + 多 seed 指标(默认)
 
@@ -84,8 +111,8 @@ make games-sidreasoner-eval MODEL=stage2
 | `ci_level` | `0.95` | 置信区间水平 |
 
 温度>0 时: SID beam 阶段仍为确定性约束束搜索, 随机性仅来自 CoT 采样;
-每个 seed 输出 `results/sidreasoner/<C>_think_<模型>_seed<seed>.json`,
-汇总输出 `<C>_think_<模型>_summary.json`(每个 NDCG@K / HR@K 的
+每个 seed 输出 `results/sidreasoner/<Dataset>/think_<变体>_temp/step_N_seed<seed>.json`,
+汇总输出 `step_N_summary.json`(每个 NDCG@K / HR@K 的
 均值、样本标准差、95% 置信区间[t 分布, n=5 时 t=2.776]), 终端同步打印。
 
 ```bash
@@ -93,7 +120,7 @@ make games-sidreasoner-metrics   # summary 生成后自动打印聚合表
 
 # 也可手动对多份单 seed 结果聚合(如分开跑/分开传文件):
 DATASET=games .venv/bin/python -m src.eval.sidreasoner_metrics aggregate \
-    --path results/sidreasoner/Video_Games_think_x_seed42.json,...,seed8888.json
+    --path results/sidreasoner/Games/think_steprule_temp/step_100_seed42.json,...,seed8888.json
 ```
 
 ## 把玩 (终端对话)
@@ -166,12 +193,10 @@ make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam
 make games-sidreasoner-think \
     MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam/global_step_100/actor_merged
 
-# 评估结果文件名由模型目录名生成, 与 steprule 的结果会同名互相覆盖;
-# 出结果后先改名, 再分别算指标:
-mv results/sidreasoner/Video_Games_think_actor_merged.json \
-   results/sidreasoner/Video_Games_think_beam_step100.json
+# 评估结果按两级目录自动路由到 Games/think_rolloutbeam/step_100.json,
+# 与 steprule / beam-div 的结果天然隔离, 直接算指标即可:
 make games-sidreasoner-metrics \
-    RESULT=results/sidreasoner/Video_Games_think_beam_step100.json
+    RESULT=results/sidreasoner/Games/think_rolloutbeam/step_100.json
 ```
 
 A/B 对照: `make games-sidreasoner-rl`(StepRule)与
@@ -270,10 +295,9 @@ make tmux TARGET=games-sidreasoner-rl-beam-div SESSION=rl-beam-div-games
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_div
 make games-sidreasoner-think \
     MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam_div/global_step_100/actor_merged
-mv results/sidreasoner/Video_Games_think_actor_merged.json \
-   results/sidreasoner/Video_Games_think_beamdiv_step100.json
+# 结果自动路由到 Games/think_rolloutbeam_div/step_100.json:
 make games-sidreasoner-metrics \
-    RESULT=results/sidreasoner/Video_Games_think_beamdiv_step100.json
+    RESULT=results/sidreasoner/Games/think_rolloutbeam_div/step_100.json
 
 # 等价手动方式: DATASET=games bash scripts/sidreasoner/rl_beam_div.sh
 #            或 REWARD=rollout_beam_div DATASET=games bash scripts/sidreasoner/rl.sh
@@ -386,8 +410,11 @@ DATASET=games SID=own     make games-sid-switch   # 切回自建 SID
   |---|---|---|
   | Stage 1/2 | `runs/sidreasoner/<C>_stage{1,2}_*/` | `runs/sidreasoner/<C>_stage{1,2}_*_own/` |
   | Stage 3 | `checkpoints/RecRL_Reasoning/<C>_stage3_rl_Qwen3-1.7B/` | `..._Qwen3-1.7B_own/` |
-  | 非思考评估 | `results/sidreasoner/final_result_<C>.json` | `final_result_<C>_own.json` |
-  | 思考评估 | `results/sidreasoner/<C>_think_*.json` | `<C>_think_*_own.json` |
+  | 非思考评估 | `results/sidreasoner/<D>/nonthink/step_N.json` | `step_N_own.json`(同目录) |
+  | 思考评估 | `results/sidreasoner/<D>/think_*/step_N.json` | `step_N_own.json`(同目录) |
+
+  (D 为 Games/Office/Industrial; 自建 SID 只体现在文件名 `_own` 后缀,
+  目录结构不变。)
 
   Stage 2 的 base_model、Stage 3 的初始策略、评估的 stage1/stage2
   简写路径均按同一规则联动, 无需手工干预。
@@ -411,7 +438,7 @@ DATASET=games SID=own     make games-sid-switch   # 切回自建 SID
 make games-diversity-collect NUM=300
 #    stage3 两种方式: 本地生成或导入服务器 think 结果(含全部三个对象)
 MODEL_SPECS="stage3=<stage3 checkpoint 路径>" make games-diversity-collect
-IMPORT_SPECS="stage3=results/sidreasoner/Video_Games_think_xxx.json" \
+IMPORT_SPECS="stage3=results/sidreasoner/Games/think_steprule/step_1900.json" \
     FORCE=1 make games-diversity-collect
 
 # ② 统计报告: TF-IDF 词频 / bigram 频率 / TTR 与 distinct-n / 熵 /
@@ -435,9 +462,9 @@ make games-diversity-report
 # ① 采集: 全量 teacher + 导入 stage2/stage3 的 think 结果
 DATASET=games .venv/bin/python -m src.analysis.collect_diversity_corpora \
     --teacher --num -1 --force \
-    --import stage2=results/sidreasoner/Video_Games_think_stage2.json \
-    --import stage3=results/sidreasoner/Video_Games_think_stage3_step1900.json
-# 或经 make: IMPORT_SPECS="stage2=results/sidreasoner/Video_Games_think_stage2.json,stage3=results/sidreasoner/Video_Games_think_stage3_step1900.json" \
+    --import stage2=results/sidreasoner/Games/think_steprule/stage2.json \
+    --import stage3=results/sidreasoner/Games/think_steprule/step_1900.json
+# 或经 make: IMPORT_SPECS="stage2=results/sidreasoner/Games/think_steprule/stage2.json,stage3=results/sidreasoner/Games/think_steprule/step_1900.json" \
 #   TEACHER=1 NUM=-1 FORCE=1 make games-diversity-collect
 
 # ② 全量统计报告(--full = 不截采样文档; 成对指标仍受 PAIR_CAP 限制,

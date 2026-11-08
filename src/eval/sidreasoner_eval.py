@@ -82,10 +82,15 @@ def main(cfg=None, base_model=None, test_data_path=None, result_json_data=None):
     if test_data_path is None:
         test_data_path = os.path.join(root, "test", fname)
     if result_json_data is None:
-        os.makedirs(os.path.join("results", "sidreasoner"), exist_ok=True)
-        result_json_data = os.path.join(
-            "results", "sidreasoner",
-            f"{category}_{os.path.basename(os.path.normpath(base_model))}.json",
+        from src.data.sid_switch import sid_suffix
+        from src.eval.result_routing import build_result_path
+
+        # 两级目录路由: results/sidreasoner/<Dataset>/nonthink/<step>.json
+        result_json_data = build_result_path(
+            category=category,
+            kind="nonthink",
+            model=base_model,
+            sid_sfx=sid_suffix(data_cfg),
         )
 
     seed = eval_cfg.get("seed", 42)

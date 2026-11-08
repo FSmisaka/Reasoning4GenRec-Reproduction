@@ -56,15 +56,17 @@ def run(mode, test_path, category, fname, max_len):
     stage = os.environ.get("MODEL") or cfg["evaluation"].get(
         "eval_model" if mode == "eval" else "think_eval_model", "stage1"
     )
-    label = (
-        stage
-        if stage in ("stage1", "stage2")
-        else os.path.basename(os.path.normpath(str(stage)))
-    )
-    result = os.path.join(
-        "results",
-        "sidreasoner",
-        f"{category}_le{max_len}_{mode}_{label}.json",
+    # 两级目录路由: results/sidreasoner/<Dataset>/le<N>/{eval,think}_<step>.json
+    from src.data.sid_switch import sid_suffix
+    from src.eval.result_routing import build_result_path
+
+    result = build_result_path(
+        category=category,
+        kind="short",
+        model=stage,
+        sid_sfx=sid_suffix(cfg["data"]),
+        max_len=max_len,
+        mode_prefix=mode,
     )
     main(test_data_path=test_path, result_json_data=result)
 

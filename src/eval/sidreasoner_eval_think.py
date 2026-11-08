@@ -109,12 +109,15 @@ def main(
 
     if result_json_data is None:
         from src.data.sid_switch import sid_suffix
+        from src.eval.result_routing import build_result_path
 
-        os.makedirs(os.path.join("results", "sidreasoner"), exist_ok=True)
-        model_label = os.path.basename(os.path.normpath(base_model))
-        result_json_data = os.path.join(
-            "results", "sidreasoner",
-            f"{category}_think_{model_label}{sid_suffix(data_cfg)}.json",
+        # 两级目录路由: results/sidreasoner/<Dataset>/think_<variant>[_temp]/<step>.json
+        result_json_data = build_result_path(
+            category=category,
+            kind="think",
+            model=base_model,
+            sid_sfx=sid_suffix(data_cfg),
+            temperature=think_temperature,
         )
     result_prefix, result_ext = os.path.splitext(result_json_data)
 

@@ -54,6 +54,7 @@ endif
 	games-sidreasoner-merge office-sidreasoner-merge industrial-sidreasoner-merge \
 	games-sidreasoner-rl-data office-sidreasoner-rl-data industrial-sidreasoner-rl-data \
 	games-sidreasoner-chat office-sidreasoner-chat industrial-sidreasoner-chat \
+	sidreasoner-organize \
 	games-rqvae office-rqvae industrial-rqvae \
 	games-rqvae-embed office-rqvae-embed industrial-rqvae-embed \
 	games-rqvae-train office-rqvae-train industrial-rqvae-train \
@@ -153,14 +154,19 @@ endef
 
 define SIDREASONER_METRICS_TARGET
 $(1)-sidreasoner-metrics:
-	@R="$$$${RESULT:-$$$$(ls -t results/sidreasoner/$(2)_think_*.json 2>/dev/null | head -n 1)}"; \
+	@R="$$$${RESULT:-$$$$(ls -t results/sidreasoner/$(3)/think_*/*.json 2>/dev/null | grep -v '_seed' | head -n 1)}"; \
 	if [ -z "$$$${R}" ]; then \
-		echo "未找到 results/sidreasoner/$(2)_think_*.json, 先运行 make $(1)-sidreasoner-think"; \
+		echo "未找到 results/sidreasoner/$(3)/think_*/*.json, 先运行 make $(1)-sidreasoner-think"; \
 		exit 1; \
 	fi; \
 	echo "metrics: $$$${R}"; \
 	DATASET=$(1) $(PY) -m src.eval.sidreasoner_metrics calc --path "$$$${R}"
 endef
+
+# 一次性整理: 把旧版平铺在 results/sidreasoner/ 下的结果按新两级目录归档
+# (数据集从文件名推断; 加 DRY_RUN=1 只看不搬)
+sidreasoner-organize:
+	DRY_RUN="$$$${DRY_RUN:-0}" $(PY) scripts/sidreasoner/organize_results.py
 
 define SIDREASONER_MERGE_TARGET
 $(1)-sidreasoner-merge:
@@ -193,9 +199,9 @@ $(eval $(call SIDREASONER_PY_TARGET,games,src.data.sidreasoner_rl_data,rl-data))
 $(eval $(call SIDREASONER_PY_TARGET,office,src.data.sidreasoner_rl_data,rl-data))
 $(eval $(call SIDREASONER_PY_TARGET,industrial,src.data.sidreasoner_rl_data,rl-data))
 
-$(eval $(call SIDREASONER_METRICS_TARGET,games,Video_Games))
-$(eval $(call SIDREASONER_METRICS_TARGET,office,Office_Products))
-$(eval $(call SIDREASONER_METRICS_TARGET,industrial,Industrial_and_Scientific))
+$(eval $(call SIDREASONER_METRICS_TARGET,games,Video_Games,Games))
+$(eval $(call SIDREASONER_METRICS_TARGET,office,Office_Products,Office))
+$(eval $(call SIDREASONER_METRICS_TARGET,industrial,Industrial_and_Scientific,Industrial))
 
 $(eval $(call SIDREASONER_MERGE_TARGET,games,Video_Games))
 $(eval $(call SIDREASONER_MERGE_TARGET,office,Office_Products))

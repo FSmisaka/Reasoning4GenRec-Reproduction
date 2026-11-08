@@ -58,7 +58,17 @@ done
 ACTUAL=${ACTUAL%,}
 [[ -n "${ACTUAL}" ]] || { echo "Error: no result shards"; exit 1; }
 
-FINAL="${RESULT_DIR}/final_result_${CATEGORY}${SID_SUFFIX}.json"
+# 两级目录路由: results/sidreasoner/<Dataset>/nonthink/<step>.json
+FINAL=$(${PY} -c "
+import os
+from config import load_config
+from src.data.sid_switch import sid_suffix
+from src.eval.result_routing import build_result_path
+cfg = load_config('sidreasoner')
+model = os.environ.get('MODEL') or cfg['evaluation']['eval_model']
+print(build_result_path(category='${CATEGORY}', kind='nonthink', model=model,
+                        sid_sfx=sid_suffix(cfg['data'])))
+")
 ${PY} -m src.eval.sidreasoner_metrics merge \
     --input_path "${TEMP_DIR}" --output_path "${FINAL}" \
     --cuda_list "${ACTUAL}"
