@@ -54,6 +54,7 @@ endif
 	games-sidreasoner-merge office-sidreasoner-merge industrial-sidreasoner-merge \
 	games-sidreasoner-rl-data office-sidreasoner-rl-data industrial-sidreasoner-rl-data \
 	games-sidreasoner-chat office-sidreasoner-chat industrial-sidreasoner-chat \
+	games-sidreasoner-curves office-sidreasoner-curves industrial-sidreasoner-curves \
 	sidreasoner-organize \
 	games-rqvae office-rqvae industrial-rqvae \
 	games-rqvae-embed office-rqvae-embed industrial-rqvae-embed \
@@ -198,6 +199,16 @@ $(eval $(call SIDREASONER_PY_TARGET,industrial,src.eval.sidreasoner_eval_think,t
 $(eval $(call SIDREASONER_PY_TARGET,games,src.data.sidreasoner_rl_data,rl-data))
 $(eval $(call SIDREASONER_PY_TARGET,office,src.data.sidreasoner_rl_data,rl-data))
 $(eval $(call SIDREASONER_PY_TARGET,industrial,src.data.sidreasoner_rl_data,rl-data))
+
+# Stage 3 RL 训练曲线(需 .venv 内安装 matplotlib: .venv/bin/pip install matplotlib)
+define SIDREASONER_CURVES_TARGET
+$(1)-sidreasoner-curves:
+	DATASET=$(1) $(PY) -m src.eval.sidreasoner_rl_curves $$$${ARGS:---all}
+endef
+
+$(eval $(call SIDREASONER_CURVES_TARGET,games))
+$(eval $(call SIDREASONER_CURVES_TARGET,office))
+$(eval $(call SIDREASONER_CURVES_TARGET,industrial))
 
 $(eval $(call SIDREASONER_METRICS_TARGET,games,Video_Games,Games))
 $(eval $(call SIDREASONER_METRICS_TARGET,office,Office_Products,Office))

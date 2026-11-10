@@ -98,6 +98,17 @@ results/sidreasoner/
 - **存量文件一键归档**: `make sidreasoner-organize`(先 `DRY_RUN=1`
   预览); 旧 think 文件默认归 `think_steprule`, 确知来自 beam 模型的
   请手动挪到对应目录。
+- **Stage 3 RL 训练曲线**: 按 step 对比三个变体的思考模式指标, 输出到
+  `<Dataset>/figures/<指标>.png`(贪心结果现场重算指标, 采样 summary 取
+  mean 并画 std 置信带; 缺 step 的折线自然截断):
+
+  ```bash
+  .venv/bin/pip install matplotlib          # 一次性(服务器 venv 默认没有)
+  make games-sidreasoner-curves             # 默认画全部: NDCG@5/10, HR@5/10
+  make games-sidreasoner-curves ARGS="--metric NDCG@10"   # 只画一张
+  ```
+  新增折线: 在 `src/eval/sidreasoner_rl_curves.py` 的 `DEFAULT_SERIES`
+  里加一行(label + 结果子目录), 或调用 `plot_rl_metric(series=...)` 传入。
 
 ## 思考模式评估: 采样解码 + 多 seed 指标(默认)
 

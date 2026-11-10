@@ -155,7 +155,7 @@ CONFIG: Dict[str, Any] = {
         # think_temperature > 0 时 CoT 用采样解码(vLLM per-request seed 可复现),
         # 并按 eval_seeds 逐 seed 评测后报告均值/标准差/95% 置信区间;
         # 0.0 保持原贪心解码行为(单 seed, 输出文件名不带 _seed 后缀)。
-        "think_temperature": 1.5,
+        "think_temperature": 0.0,
         "think_top_p": 0.95,
         "eval_seeds": [42, 43, 44, 45, 46],
         "ci_level": 0.95,
