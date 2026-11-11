@@ -143,12 +143,18 @@ def run_sft(
     val_data_sid_prediction,
     val_data_title2sid,
     val_data_sid2title,
+    loss="ce",
 ):
     """
     共享 SFT 驱动(Stage 1/2 通用), 训练配置与原始实现一致:
     bf16 全参微调, epoch 级评估/保存, eval_loss 早停, 结束保存
     final_checkpoint(模型+tokenizer)。tokenizer 须为已扩展 SID
     token 的版本, 且与构造训练数据所用的是同一个实例。
+
+    loss="gem" 时改用 GEM 损失(src/train/sidreasoner_gem.py,
+    ICLR 2025, arXiv:2408.16673), 其余训练行为不变; 评估/早停
+    仍基于 CE eval_loss(官方 GEM 实现行为)。超参读取
+    train_cfg["gem"](beta/h/print_entropy, 见 config/sidreasoner.py)。
     """
     train_cfg = cfg["training"][stage_name]
     seed = train_cfg["seed"]
@@ -198,49 +204,89 @@ def run_sft(
         model.is_parallelizable = True
         model.model_parallel = True
 
-    trainer = MultiEvalTrainer(
-        model=model,
-        train_dataset=hf_train_dataset,
-        eval_dataset=hf_val_dataset,
-        extra_eval_sets={
-            "title2sid": hf_title2sid,
-            "sid2title": hf_sid2title,
-        },
-        args=transformers.TrainingArguments(
-            run_name=train_cfg.get("wandb_run_name")
-            or f"{category}_{stage_name}",
-            per_device_train_batch_size=micro_batch_size,
-            per_device_eval_batch_size=micro_batch_size,
-            gradient_accumulation_steps=gradient_accumulation_steps,
-            warmup_steps=train_cfg["warmup_steps"],
-            num_train_epochs=train_cfg["epochs"],
-            learning_rate=train_cfg["lr"],
-            bf16=True,
-            logging_steps=1,
-            optim="adamw_torch",
-            gradient_checkpointing=gradient_checkpointing,
-            gradient_checkpointing_kwargs=(
-                {"use_reentrant": False} if gradient_checkpointing else None
-            ),
-            eval_strategy="epoch",
-            save_strategy="epoch",
-            metric_for_best_model="eval_loss",
-            greater_is_better=False,
-            output_dir=output_dir,
-            save_total_limit=train_cfg["save_total_limit"],
-            load_best_model_at_end=True,
-            ddp_find_unused_parameters=False if ddp else None,
-            report_to=train_cfg.get("report_to", "wandb"),
+    run_name = train_cfg.get("wandb_run_name") or f"{category}_{stage_name}"
+    if loss == "gem" and not train_cfg.get("wandb_run_name"):
+        run_name = f"{run_name}_gem"
+    args_kwargs = dict(
+        run_name=run_name,
+        per_device_train_batch_size=micro_batch_size,
+        per_device_eval_batch_size=micro_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        warmup_steps=train_cfg["warmup_steps"],
+        num_train_epochs=train_cfg["epochs"],
+        learning_rate=train_cfg["lr"],
+        bf16=True,
+        logging_steps=1,
+        optim="adamw_torch",
+        gradient_checkpointing=gradient_checkpointing,
+        gradient_checkpointing_kwargs=(
+            {"use_reentrant": False} if gradient_checkpointing else None
         ),
-        data_collator=transformers.DataCollatorForSeq2Seq(
-            tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
-        ),
-        callbacks=[
-            EarlyStoppingCallback(
-                early_stopping_patience=train_cfg["patience"]
-            )
-        ],
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        output_dir=output_dir,
+        save_total_limit=train_cfg["save_total_limit"],
+        load_best_model_at_end=True,
+        ddp_find_unused_parameters=False if ddp else None,
+        report_to=train_cfg.get("report_to", "wandb"),
     )
+    if loss == "gem":
+        from src.train.sidreasoner_gem import (
+            GemMultiEvalTrainer,
+            GemTrainingArguments,
+        )
+
+        gem_cfg = train_cfg.get("gem") or {}
+        print(
+            f"[{stage_name}] GEM loss: beta={gem_cfg.get('beta', 0.7)}, "
+            f"h={gem_cfg.get('h', 'logsigmoid')}, "
+            f"print_entropy={gem_cfg.get('print_entropy', False)}"
+        )
+        trainer = GemMultiEvalTrainer(
+            model=model,
+            train_dataset=hf_train_dataset,
+            eval_dataset=hf_val_dataset,
+            extra_eval_sets={
+                "title2sid": hf_title2sid,
+                "sid2title": hf_sid2title,
+            },
+            args=GemTrainingArguments(
+                **args_kwargs,
+                loss="gem",
+                gem_beta=gem_cfg.get("beta", 0.7),
+                gem_h=gem_cfg.get("h", "logsigmoid"),
+                print_entropy=gem_cfg.get("print_entropy", False),
+            ),
+            data_collator=transformers.DataCollatorForSeq2Seq(
+                tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
+            ),
+            callbacks=[
+                EarlyStoppingCallback(
+                    early_stopping_patience=train_cfg["patience"]
+                )
+            ],
+        )
+    else:
+        trainer = MultiEvalTrainer(
+            model=model,
+            train_dataset=hf_train_dataset,
+            eval_dataset=hf_val_dataset,
+            extra_eval_sets={
+                "title2sid": hf_title2sid,
+                "sid2title": hf_sid2title,
+            },
+            args=transformers.TrainingArguments(**args_kwargs),
+            data_collator=transformers.DataCollatorForSeq2Seq(
+                tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
+            ),
+            callbacks=[
+                EarlyStoppingCallback(
+                    early_stopping_patience=train_cfg["patience"]
+                )
+            ],
+        )
     model.config.use_cache = False
 
     trainer.train(

@@ -29,7 +29,7 @@ from src.train.common import resolve_category
 from src.train.sidreasoner_common import run_sft
 
 
-def main(cfg=None):
+def main(cfg=None, loss="ce"):
     cfg = cfg or load_config("sidreasoner")
     data_cfg, model_cfg = cfg["data"], cfg["model"]
     train_cfg = cfg["training"]["activation"]
@@ -46,14 +46,18 @@ def main(cfg=None):
             root, "index", f"{category}.integrated_narrative.csv"
         ),
     }
-    # 与 Stage 1 相同的 SID 集后缀规则, 保证 base_model 与输出目录一致
+    # 与 Stage 1 相同的 SID 集后缀规则, 保证 base_model 与输出目录一致。
+    # GEM 变体(loss="gem", 见 src/train/sidreasoner_activation_gem.py)默认
+    # 接 GEM Stage 1 的 final_checkpoint; 若显式配置过 training.sft.out,
+    # 需同步在 training.activation.base_model 指向对应的 GEM checkpoint
     from src.data.sid_switch import sid_suffix
 
     suffix = sid_suffix(data_cfg)
     if suffix:
         print(f"[activation] 当前 SID 集: own, 路径自动加后缀 {suffix}")
     stage1_out = cfg["training"]["sft"]["out"] or os.path.join(
-        "runs", "sidreasoner", f"{category}_stage1_sft{suffix}"
+        "runs", "sidreasoner",
+        f"{category}_stage1_sft{suffix}" + ("_gem" if loss == "gem" else ""),
     )
     base_model = train_cfg.get("base_model") or os.path.join(
         stage1_out, "final_checkpoint"
@@ -98,7 +102,8 @@ def main(cfg=None):
     )
 
     out_dir = train_cfg["out"] or os.path.join(
-        "runs", "sidreasoner", f"{category}_stage2_activation{suffix}"
+        "runs", "sidreasoner",
+        f"{category}_stage2_activation{suffix}" + ("_gem" if loss == "gem" else ""),
     )
     run_sft(
         "activation",
@@ -112,6 +117,7 @@ def main(cfg=None):
         val_sid,
         val_title2sid,
         val_sid2title,
+        loss=loss,
     )
 
 

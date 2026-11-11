@@ -66,9 +66,21 @@ DEFAULT_SERIES = [
      "subdir": "think_rolloutbeam", "color": C_BLUE, "ls": "-", "marker": "o"},
     {"label": "Rollout-Beam x R_div (OneReason)",
      "subdir": "think_rolloutbeam_div", "color": C_RED, "ls": "--", "marker": "s"},
-    {"label": "StepRule (原始 SIDReasoner)",
+    {"label": "StepRule (SIDReasoner)",
      "subdir": "think_steprule", "color": C_GRAY, "ls": "-.", "marker": "^"},
 ]
+
+# SIDReasoner 官方论文(arXiv:2603.23183, Table 2)思考模式的最终结果,
+# 以水平参考线画在图中。每数据集 4 项: HR@5 / NDCG@5 / HR@10 / NDCG@10
+# (即 Recall@5, NDCG@5, Recall@10, NDCG@10)。
+PAPER_BASELINE = {
+    "Games": {"HR@5": 0.0710, "NDCG@5": 0.0460,
+              "HR@10": 0.1031, "NDCG@10": 0.0563},
+    "Office": {"HR@5": 0.1373, "NDCG@5": 0.1119,
+               "HR@10": 0.1648, "NDCG@10": 0.1208},
+    "Industrial": {"HR@5": 0.1109, "NDCG@5": 0.0905,
+                   "HR@10": 0.1438, "NDCG@10": 0.1010},
+}
 
 
 def setup_style():
@@ -164,6 +176,7 @@ def plot_rl_metric(
     root=None,
     figsize=(5.5, 2.8),
     xtick_every=200,
+    paper_baseline=True,
 ):
     """画一张"指标 vs RL step"的多变体对比折线图, 返回保存路径。
 
@@ -175,6 +188,8 @@ def plot_rl_metric(
         out_path: 输出路径(默认 results/sidreasoner/<D>/figures/<指标>.png)。
         root: 结果根目录(默认 results/sidreasoner, 供测试注入)。
         figsize / xtick_every: 图尺寸与横轴刻度间隔。
+        paper_baseline: 是否叠加官方论文最终结果的水平参考线
+            (金色点线, 数据见 PAPER_BASELINE; 指标不在表中时自动跳过)。
     """
     cfg = load_config("sidreasoner")
     category = cfg["data"]["categories"][dataset]
@@ -222,6 +237,16 @@ def plot_rl_metric(
         plt.close(fig)
         raise SystemExit(f"没有任何折线有数据({metric_key}), 不出图")
 
+    # 官方论文最终结果的水平参考线(金色点线, 参与图例)
+    n_handles = plotted
+    if (paper_baseline and ds_dir in PAPER_BASELINE
+            and metric_key in PAPER_BASELINE[ds_dir]):
+        ref = PAPER_BASELINE[ds_dir][metric_key]
+        ax.axhline(ref, color=C_GOLD, ls=":", lw=1.2,
+                   label="SIDReasoner")
+        print(f"[baseline] {ds_dir} {metric_key} = {ref} (论文值, 水平线)")
+        n_handles += 1
+
     if all_steps:
         lo = (min(all_steps) // 100) * 100
         hi = ((max(all_steps) + 99) // 100) * 100
@@ -234,7 +259,7 @@ def plot_rl_metric(
         ax.spines[sp].set_visible(False)
 
     # 图例置于图片下方(outside lower center + constrained_layout, 不与内容重叠)
-    fig.legend(loc="outside lower center", ncol=min(3, plotted),
+    fig.legend(loc="outside lower center", ncol=min(4, n_handles),
                frameon=False, columnspacing=1.4, handlelength=1.8)
 
     if out_path is None:
@@ -254,6 +279,8 @@ def main():
                     help=f"一次画全部 {len(SUPPORTED_METRICS)} 张: {', '.join(SUPPORTED_METRICS)}")
     ap.add_argument("--dataset", default=os.environ.get("DATASET", "games"),
                     choices=("games", "office", "industrial"))
+    ap.add_argument("--no-baseline", action="store_true",
+                    help="不叠加官方论文最终结果的水平参考线")
     args = ap.parse_args()
 
     if args.all:
@@ -264,7 +291,8 @@ def main():
         ap.error("请给 --metric <指标> 或 --all")
 
     for m in metrics:
-        plot_rl_metric(m, dataset=args.dataset)
+        plot_rl_metric(m, dataset=args.dataset,
+                       paper_baseline=not args.no_baseline)
 
 
 if __name__ == "__main__":

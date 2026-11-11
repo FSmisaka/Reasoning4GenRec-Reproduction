@@ -72,6 +72,23 @@ make games-sidreasoner-metrics         # 自动取最新 think 结果, 可用 RE
 make games-sidreasoner-eval MODEL=stage2
 ```
 
+## SFT 变体: GEM 损失(Stage 1/2, 可选)
+
+把 Stage 1/2 SFT 的 CE 损失换成 [GEM](https://arxiv.org/abs/2408.16673)(ICLR 2025, [官方代码](https://github.com/liziniu/GEM)): 以 `q = softmax(logits/β)` 为固定目标分布的熵正则逆 KL 损失, 精度接近 CE 的同时保留输出多样性(β→1 退化为 CE, β 越小越保多样; 更多样的冷启动模型对后续 Stage 3 RL 探索有利, 见 GEM 论文)。实现移植自官方 `sft_trainer_v2.py`, **评估/早停仍用 CE eval_loss**(官方行为), 训练日志附带 `ce_loss` 与 `entropy` 诊断量, 产物目录自动加 `_gem` 后缀与基线互不覆盖:
+
+```bash
+# 双卡(2x A800-80G): batch/lr 等沿用基线配置, 仅换损失, 梯度累积自动适配卡数
+make games-sidreasoner-sft-gem           # Stage 1 GEM -> runs/sidreasoner/Video_Games_stage1_sft_gem
+make games-sidreasoner-activation-gem    # Stage 2 GEM(默认接 Stage 1 GEM 的 final_checkpoint)
+# 等价手动方式: DATASET=games bash scripts/sidreasoner/sft_gem.sh
+# 挂 tmux:     make tmux TARGET=games-sidreasoner-sft-gem SESSION=sft-gem
+```
+
+- 超参: `config/sidreasoner.py` 的 `training.sft.gem` / `training.activation.gem`(`beta=0.7`、`h="logsigmoid"` = 官方论文/脚本默认)
+- 显式配置过 `training.sft.out` 时, Stage 2 GEM 需手动把 `training.activation.base_model` 指到 GEM Stage 1 checkpoint
+- 监控: `loss`(GEM)与 `ce_loss` 应同步下降; `entropy` 下降慢于 CE 基线即多样性保留生效
+- GEM 需对全词表做 softmax, 单卡额外约 2-3 GB(micro_batch=1, seq 1024), 80 GB 卡无压力
+
 ## 评测结果目录结构(两级路由)
 
 所有评测结果按 **数据集 x 评测类型** 自动路由到
@@ -100,7 +117,8 @@ results/sidreasoner/
   请手动挪到对应目录。
 - **Stage 3 RL 训练曲线**: 按 step 对比三个变体的思考模式指标, 输出到
   `<Dataset>/figures/<指标>.png`(贪心结果现场重算指标, 采样 summary 取
-  mean 并画 std 置信带; 缺 step 的折线自然截断):
+  mean 并画 std 置信带; 缺 step 的折线自然截断; 叠加官方论文最终结果的
+  金色水平参考线, `--no-baseline` 可关):
 
   ```bash
   .venv/bin/pip install matplotlib          # 一次性(服务器 venv 默认没有)

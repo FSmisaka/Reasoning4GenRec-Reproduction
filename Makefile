@@ -45,6 +45,8 @@ endif
 	games-gru4rec office-gru4rec industrial-gru4rec \
 	games-sidreasoner-sft office-sidreasoner-sft industrial-sidreasoner-sft \
 	games-sidreasoner-activation office-sidreasoner-activation industrial-sidreasoner-activation \
+	games-sidreasoner-sft-gem office-sidreasoner-sft-gem industrial-sidreasoner-sft-gem \
+	games-sidreasoner-activation-gem office-sidreasoner-activation-gem industrial-sidreasoner-activation-gem \
 	games-sidreasoner-rl office-sidreasoner-rl industrial-sidreasoner-rl \
 	games-sidreasoner-rl-beam office-sidreasoner-rl-beam industrial-sidreasoner-rl-beam \
 	games-sidreasoner-rl-beam-div office-sidreasoner-rl-beam-div industrial-sidreasoner-rl-beam-div \
@@ -70,7 +72,7 @@ setup:
 	$(PIP) install $(PIP_FLAGS) torch
 	$(PIP) install $(PIP_FLAGS) "transformers==4.51.3" "tokenizers==0.21.1" "huggingface-hub==0.30.2" \
 	    "datasets==3.5.1" "accelerate==1.6.0" "peft==0.15.0" \
-	    pandas numpy pyyaml tqdm wandb
+	    pandas numpy pyyaml tqdm wandb matplotlib
 
 download-model:
 	env HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 hf download Qwen/Qwen3-1.7B --local-dir ../Qwen3-1.7B
@@ -136,6 +138,9 @@ industrial-gru4rec:
 
 # SIDReasoner: 目标名 <dataset>-sidreasoner-<step>
 #   sft / activation / rl / eval  -> scripts/sidreasoner/<step>.sh
+#   sft-gem / activation-gem      -> Stage 1/2 的 GEM 损失变体
+#                                    (sft_gem.sh / activation_gem.sh,
+#                                    产物目录自动加 _gem 后缀)
 #   rl-beam                       -> rl.sh 的 Rollout-Beam reward 变体(rl_beam.sh)
 #   rl-beam-div                   -> 再乘 OneReason R_div 的变体(rl_beam_div.sh)
 #   think / rl-data               -> 直接调 python 模块(MODEL= 可覆盖待评模型)
@@ -180,6 +185,12 @@ $(eval $(call SIDREASONER_TARGET,industrial,sft,sft))
 $(eval $(call SIDREASONER_TARGET,games,activation,activation))
 $(eval $(call SIDREASONER_TARGET,office,activation,activation))
 $(eval $(call SIDREASONER_TARGET,industrial,activation,activation))
+$(eval $(call SIDREASONER_TARGET,games,sft_gem,sft-gem))
+$(eval $(call SIDREASONER_TARGET,office,sft_gem,sft-gem))
+$(eval $(call SIDREASONER_TARGET,industrial,sft_gem,sft-gem))
+$(eval $(call SIDREASONER_TARGET,games,activation_gem,activation-gem))
+$(eval $(call SIDREASONER_TARGET,office,activation_gem,activation-gem))
+$(eval $(call SIDREASONER_TARGET,industrial,activation_gem,activation-gem))
 $(eval $(call SIDREASONER_TARGET,games,rl,rl))
 $(eval $(call SIDREASONER_TARGET,office,rl,rl))
 $(eval $(call SIDREASONER_TARGET,industrial,rl,rl))

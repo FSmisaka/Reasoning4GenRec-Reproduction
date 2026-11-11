@@ -121,13 +121,31 @@ def test_series_points_greedy_and_summary(fake_results):
     assert pts[0][2] == 0.01
 
 
-def test_plot_rl_metric_end_to_end(fake_results):
+def test_paper_baseline_table():
+    """官方论文 Table 2 参考值(SIDReasoner 思考模式最终结果)。"""
+    import src.eval.sidreasoner_rl_curves as curves
+
+    b = curves.PAPER_BASELINE
+    assert b["Games"]["HR@5"] == 0.0710 and b["Games"]["NDCG@10"] == 0.0563
+    assert b["Office"]["NDCG@5"] == 0.1119 and b["Office"]["HR@10"] == 0.1648
+    assert b["Industrial"]["HR@5"] == 0.1109 and b["Industrial"]["NDCG@10"] == 0.1010
+    assert set(b["Games"]) == {"HR@5", "NDCG@5", "HR@10", "NDCG@10"}
+
+
+def test_plot_rl_metric_end_to_end(fake_results, capsys):
     import src.eval.sidreasoner_rl_curves as curves
 
     out = curves.plot_rl_metric("NDCG@10", dataset="games",
                                 root=str(fake_results))
     assert out.endswith("Games/figures/NDCG@10.png")
     assert (fake_results / "Games" / "figures" / "NDCG@10.png").stat().st_size > 10000
+    # 论文参考线分支确实执行(Games NDCG@10 = 0.0563)
+    assert "[baseline] Games NDCG@10 = 0.0563" in capsys.readouterr().out
+
+    # 可用 paper_baseline=False 关闭参考线
+    curves.plot_rl_metric("NDCG@10", dataset="games", root=str(fake_results),
+                          paper_baseline=False)
+    assert "[baseline]" not in capsys.readouterr().out
 
     # 别名 + HR 指标
     out = curves.plot_rl_metric("Recall(HitRate)@10", dataset="games",

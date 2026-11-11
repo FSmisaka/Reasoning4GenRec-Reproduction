@@ -58,6 +58,17 @@ CONFIG: Dict[str, Any] = {
             "wandb_project": "SIDReasoner",
             "report_to": "wandb",
             "out": None,
+            # ---- GEM 变体(Stage 1: src.train.sidreasoner_sft_gem) ----
+            # 把 SFT 的 CE 损失换成 GEM(ICLR 2025, arXiv:2408.16673,
+            # 官方实现 github.com/liziniu/GEM): 带熵正则的逆 KL 分布
+            # 匹配损失, 训练精度接近 CE 的同时保留输出多样性。
+            # beta: 目标分布温度, 官方论文/脚本默认 0.7, 越小越保多样性,
+            #   beta->1 退化为接近 CE 的行为;
+            # h: 官方 Qwen 训练脚本用 "logsigmoid"(自适应权重), "linear"
+            #   为等权重, 官方注明两者差异通常可忽略;
+            # print_entropy: 训练日志附带 token 熵(监测多样性, 官方可选项)。
+            # 评估/早停仍用 CE eval_loss(官方 GEM 行为), 与基线可比。
+            "gem": {"beta": 0.7, "h": "logsigmoid", "print_entropy": True},
         },
         "activation": {
             "batch_size": 1024,
@@ -77,6 +88,11 @@ CONFIG: Dict[str, Any] = {
             "report_to": "wandb",
             "base_model": None,
             "out": None,
+            # ---- GEM 变体(Stage 2: src.train.sidreasoner_activation_gem) ----
+            # 含义同 training.sft.gem; Stage 2 GEM 默认从 GEM Stage 1 的
+            # final_checkpoint 继续训练(显式配置过 training.sft.out 时需
+            # 手动把 base_model 指向对应 GEM checkpoint)
+            "gem": {"beta": 0.7, "h": "logsigmoid", "print_entropy": True},
         },
     },
     "rl": {

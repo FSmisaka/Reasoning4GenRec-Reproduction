@@ -33,7 +33,7 @@ from src.train.sidreasoner_common import run_sft
 from torch.utils.data import ConcatDataset
 
 
-def main(cfg=None):
+def main(cfg=None, loss="ce"):
     cfg = cfg or load_config("sidreasoner")
     data_cfg, model_cfg = cfg["data"], cfg["model"]
     train_cfg = cfg["training"]["sft"]
@@ -132,14 +132,17 @@ def main(cfg=None):
     )
 
     # 输出目录自动带 SID 集后缀(official 无后缀, own -> *_own),
-    # 两套 SID 的产物互不覆盖; SID_SET 环境变量可强制指定
+    # 两套 SID 的产物互不覆盖; SID_SET 环境变量可强制指定。
+    # GEM 变体(loss="gem", 见 src/train/sidreasoner_sft_gem.py)额外
+    # 加 _gem 后缀, 与 CE 基线互不覆盖
     from src.data.sid_switch import sid_suffix
 
     suffix = sid_suffix(data_cfg)
     if suffix:
         print(f"[sft] 当前 SID 集: own, 输出目录自动加后缀 {suffix}")
     out_dir = train_cfg["out"] or os.path.join(
-        "runs", "sidreasoner", f"{category}_stage1_sft{suffix}"
+        "runs", "sidreasoner",
+        f"{category}_stage1_sft{suffix}" + ("_gem" if loss == "gem" else ""),
     )
     run_sft(
         "sft",
@@ -153,6 +156,7 @@ def main(cfg=None):
         val_sid,
         val_title2sid,
         val_sid2title,
+        loss=loss,
     )
 
 
