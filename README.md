@@ -95,7 +95,7 @@ make games-sidreasoner-activation-gem    # Stage 2 GEM(默认接 Stage 1 GEM 的
 ```
 
 - 超参: `config/sidreasoner.py` 的 `training.sft.gem` / `training.activation.gem`(`beta=0.7`、`h="logsigmoid"` = 官方论文/脚本默认)
-- 提速(2x A800-80G): gem 段的 `micro_batch_size: 8` 仅对 GEM 运行生效(CE 基线仍为 1/2), 梯度累积自动 512/256→64 补偿, 全局 batch 仍 1024、训练等价; 显存吃紧(3072-token 通用子集)可降为 4。GEM 需物化多个全词表张量(峰值额外 30GB+), 故 `gradient_checkpointing` 保持 True
+- 提速(2x A800-80G): gem 段的 `micro_batch_size`(Stage 1 为 4, Stage 2 为 8)仅对 GEM 运行生效(CE 基线仍为 1/2), 梯度累积自动补偿, 全局 batch 仍 1024、训练等价。注意: accelerate 的 bf16 混合精度会把 forward 输出 logits 转成 fp32(gem_loss 内部已转回 bf16、ce_loss 的 fp32 拷贝已提前释放, 见 `sidreasoner_gem.py`), 全 3072 批次峰值仍约 55-60GB, micro=8 必 OOM; `gradient_checkpointing` 必须保持 True
 - 显式配置过 `training.sft.out` 时, Stage 2 GEM 需手动把 `training.activation.base_model` 指到 GEM Stage 1 checkpoint
 - 监控: `loss`(GEM)与 `ce_loss` 应同步下降; `entropy` 下降慢于 CE 基线即多样性保留生效; `print_entropy` 有百分之几开销, 极限提速可关
 - 评测: `make games-sidreasoner-think MODEL=runs/sidreasoner/Video_Games_stage1_sft_gem/final_checkpoint` -> 结果自动路由到 `results/sidreasoner/Games/sft_gem/stage1.json`(原始 SFT -> `sft/stage1.json`, 见下节路由表)

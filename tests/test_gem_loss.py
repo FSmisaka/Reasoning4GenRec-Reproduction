@@ -81,6 +81,17 @@ def main():
     assert torch.allclose(logits2.grad[:, :5], grad_masked, atol=1e-8)
     print("[3] num_items 归一化 / -100 掩码 / 梯度检查通过")
 
+    # fp32 输入(accelerate bf16 混合精度的 forward 输出)会被 cast 到 bf16,
+    # 结果与直接给 bf16 输入一致(确定性 round), 且梯度可回流
+    bf16_logits = logits.detach().to(torch.bfloat16).requires_grad_(True)
+    fp32_logits = logits.detach().to(torch.float32).requires_grad_(True)
+    l_bf = gem_loss(bf16_logits, labels, beta=0.7, h="logsigmoid")
+    l_f32 = gem_loss(fp32_logits, labels, beta=0.7, h="logsigmoid")
+    assert torch.allclose(l_f32, l_bf, atol=1e-4), (l_f32.item(), l_bf.item())
+    l_f32.backward()
+    assert torch.isfinite(fp32_logits.grad).all()
+    print("[3b] fp32 输入自动转 bf16(与 accelerate 混合精度输出对接)检查通过")
+
     # entropy 工具: 与直接按定义计算一致
     e1 = chunked_entropy_from_logits(shift_logits, batch_size=7)
     e2 = -(lp * lp.exp()).sum(-1)

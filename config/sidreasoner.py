@@ -36,7 +36,8 @@ CONFIG: Dict[str, Any] = {
         },
     },
     "model": {
-        "base_model": "/thuir/wangyiyao/Qwen3-1.7B",
+        # "base_model": "/thuir/wangyiyao/Qwen3-1.7B",
+        "base_model": "/data/jiangchumeng/wangyiyao/Qwen3-1.7B",
     },
     "training": {
         "sft": {
@@ -71,15 +72,20 @@ CONFIG: Dict[str, Any] = {
             # 评估/早停仍用 CE eval_loss(官方 GEM 行为), 与基线可比。
             # ---- 以下 3 个覆盖键仅 GEM 运行生效(CE 基线仍用上方默认值),
             #   按 2x A800-80G 调优, 提升吞吐且不改变训练数学 ----
-            # micro_batch_size: 1 -> 8。Qwen3-1.7B 全参 bf16 的静态显存
+            # micro_batch_size: 1 -> 4。Qwen3-1.7B 全参 bf16 的静态显存
             #   (权重+梯度+AdamW)约 14GB, micro=1 时每卡仅用约 18GB/80GB,
-            #   GPU 严重欠载; 提到 8 后梯度累积 512->64(2 卡)自动补偿,
+            #   GPU 严重欠载; 提到 4 后梯度累积 512->128(2 卡)自动补偿,
             #   全局 batch 仍为 1024, 训练结果等价(num_items_in_batch
             #   归一化保证跨累积精确)。需整除: batch_size/micro/卡数。
-            #   显存若吃紧(如 3072-token 通用子集占比高)可降为 4。
-            # gradient_checkpointing: 保持 True。GEM 损失需物化多个
-            #   [tokens, vocab] 全词表张量(峰值额外 30GB+), 关闭重计算
-            #   省约 1/3 时间但在 3072 长序列批次上有 OOM 风险, 不建议。
+            #   注意勿盲目加大: accelerate 的 bf16 混合精度会把 forward
+            #   输出 logits 统一转成 fp32(gem_loss 内部已转回 bf16 计算,
+            #   但这份 fp32 logits 拷贝无法避免, 4x3072 批次约 7.5GB),
+            #   官方实现还保留模型 CE 前向作 ce_loss 诊断(内部另有
+            #   logits.float() 拷贝, 已在 gem 分支提前释放)。综合下来
+            #   micro=4 的全 3072 批次峰值约 55-60GB; micro=8 同场景
+            #   约 87GB 必 OOM。显存仍吃紧可降 2。
+            # gradient_checkpointing: 保持 True。关闭重计算省约 1/3 时间
+            #   但上述全词表张量叠加激活, 在 3072 长序列批次上必 OOM。
             # save_total_limit: 10 -> 3。每份 checkpoint 含优化器状态约
             #   14GB, 只减少保留份数(best/last 均保留, 不影响早停与续训),
             #   不减少保存频率, 主要省磁盘。
@@ -87,7 +93,7 @@ CONFIG: Dict[str, Any] = {
                 "beta": 0.7,
                 "h": "logsigmoid",
                 "print_entropy": True,
-                "micro_batch_size": 8,
+                "micro_batch_size": 4,
                 "gradient_checkpointing": True,
                 "save_total_limit": 3,
             },

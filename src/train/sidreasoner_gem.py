@@ -85,6 +85,13 @@ def gem_loss(logits, labels, num_items_in_batch=None, beta=0.7, ignore_index=-10
     labels 中 ignore_index(-100) 的位置不参与损失; num_items_in_batch
     非 None 时按官方方式对整个梯度累积宏批次做 token 数归一化。
     """
+    # [SIDReasoner] Trainer 的 bf16 混合精度经 accelerate 会把 forward 输出
+    # 统一转成 fp32(convert_outputs_to_fp32), 即使模型权重本身是 bf16;
+    # 官方 GEM 运行在 DeepSpeed 下 logits 即为 bf16。这里显式回到 bf16:
+    # 数值精度与官方 bf16 训练一致, 并把后续 [tokens, vocab] 级中间张量
+    # 显存减半(4x3072 批次下 fp32 会使 GEM 部分额外多占 ~20GB 而 OOM)。
+    if logits.dtype == torch.float32:
+        logits = logits.to(torch.bfloat16)
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
 
@@ -138,6 +145,10 @@ class GemMultiEvalTrainer(MultiEvalTrainer):
         mask = shift_labels != -100
         shift_logits = shift_logits[mask]
         shift_labels = shift_labels[mask]
+        # 同 gem_loss: accelerate 的 bf16 混合精度下输出为 fp32,
+        # 熵统计逐块物化 [tokens, vocab] 张量, 转 bf16 控制瞬时显存
+        if shift_logits.dtype == torch.float32:
+            shift_logits = shift_logits.to(torch.bfloat16)
 
         training_logs = {}
         if self.args.print_entropy:
@@ -179,6 +190,7 @@ class GemMultiEvalTrainer(MultiEvalTrainer):
         if getattr(self.args, "past_index", -1) >= 0:
             self._past = outputs[self.args.past_index]
 
+        ce_loss_log = None
         if labels is not None:
             unwrapped_model = self.accelerator.unwrap_model(model)
             if _is_peft_model(unwrapped_model):
@@ -196,9 +208,22 @@ class GemMultiEvalTrainer(MultiEvalTrainer):
                     f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
                 )
             # 评估或 loss="ce" 时用模型自带的 CE, 保证 eval_loss 与基线可比
+            ce_loss_log = None
             if self.args.loss == "ce" or self.control.should_evaluate:
                 loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
             else:
+                # [SIDReasoner] GEM 训练分支: 先取出 ce_loss 诊断值并释放模型
+                # 内置 CE 损失张量 -- HF 的 ForCausalLMLoss 内部会物化一份
+                # [B,S,V] 的 fp32 logits 拷贝(4x3072 批次约 7.5GB), 若保留到
+                # gem_loss 之后会与其全词表中间张量峰值叠加导致 OOM。数值与
+                # 官方"末尾读取"完全一致, 仅改变读取/释放时机。
+                ce_tensor = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+                ce_loss_log = round(ce_tensor.item(), 4)
+                del ce_tensor
+                if isinstance(outputs, dict):
+                    # ModelOutput 禁止 delitem, 置 None 以释放 CE 损失张量
+                    # (进而释放其 autograd 图持有的 fp32 logits 拷贝)
+                    outputs["loss"] = None
                 loss = self.gem_loss(
                     outputs.logits,
                     inputs["labels"],
@@ -215,10 +240,12 @@ class GemMultiEvalTrainer(MultiEvalTrainer):
             self.training_logs = self.compute_training_logs(
                 outputs.logits, inputs["labels"]
             )
-            self.training_logs["ce_loss"] = (
-                outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-            )
-            self.training_logs["ce_loss"] = round(self.training_logs["ce_loss"].item(), 4)
+            if ce_loss_log is not None:
+                self.training_logs["ce_loss"] = ce_loss_log
+            else:
+                self.training_logs["ce_loss"] = round(
+                    (outputs["loss"] if isinstance(outputs, dict) else outputs[0]).item(), 4
+                )
 
         return (loss, outputs) if return_outputs else loss
 
