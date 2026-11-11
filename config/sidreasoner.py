@@ -55,8 +55,8 @@ CONFIG: Dict[str, Any] = {
             "mask_assistant": True,
             "train_new_token_embeddings_only": False,
             "gradient_checkpointing": True,
-            "wandb_project": "SIDReasoner",
-            "report_to": "wandb",
+            "wandb_project": "SIDReasoner",  # 仅 report_to="wandb" 时生效
+            "report_to": "none",  # 关闭 wandb 上报(CE/GEM 的 Stage 1/2 均生效, 同 rl.use_wandb=False); 恢复改回 "wandb"
             "out": None,
             # ---- GEM 变体(Stage 1: src.train.sidreasoner_sft_gem) ----
             # 把 SFT 的 CE 损失换成 GEM(ICLR 2025, arXiv:2408.16673,
@@ -66,9 +66,31 @@ CONFIG: Dict[str, Any] = {
             #   beta->1 退化为接近 CE 的行为;
             # h: 官方 Qwen 训练脚本用 "logsigmoid"(自适应权重), "linear"
             #   为等权重, 官方注明两者差异通常可忽略;
-            # print_entropy: 训练日志附带 token 熵(监测多样性, 官方可选项)。
+            # print_entropy: 训练日志附带 token 熵(监测多样性, 官方可选项,
+            #   每步对全词表计算, 有百分之几的额外开销, 追求极限速度可关)。
             # 评估/早停仍用 CE eval_loss(官方 GEM 行为), 与基线可比。
-            "gem": {"beta": 0.7, "h": "logsigmoid", "print_entropy": True},
+            # ---- 以下 3 个覆盖键仅 GEM 运行生效(CE 基线仍用上方默认值),
+            #   按 2x A800-80G 调优, 提升吞吐且不改变训练数学 ----
+            # micro_batch_size: 1 -> 8。Qwen3-1.7B 全参 bf16 的静态显存
+            #   (权重+梯度+AdamW)约 14GB, micro=1 时每卡仅用约 18GB/80GB,
+            #   GPU 严重欠载; 提到 8 后梯度累积 512->64(2 卡)自动补偿,
+            #   全局 batch 仍为 1024, 训练结果等价(num_items_in_batch
+            #   归一化保证跨累积精确)。需整除: batch_size/micro/卡数。
+            #   显存若吃紧(如 3072-token 通用子集占比高)可降为 4。
+            # gradient_checkpointing: 保持 True。GEM 损失需物化多个
+            #   [tokens, vocab] 全词表张量(峰值额外 30GB+), 关闭重计算
+            #   省约 1/3 时间但在 3072 长序列批次上有 OOM 风险, 不建议。
+            # save_total_limit: 10 -> 3。每份 checkpoint 含优化器状态约
+            #   14GB, 只减少保留份数(best/last 均保留, 不影响早停与续训),
+            #   不减少保存频率, 主要省磁盘。
+            "gem": {
+                "beta": 0.7,
+                "h": "logsigmoid",
+                "print_entropy": True,
+                "micro_batch_size": 8,
+                "gradient_checkpointing": True,
+                "save_total_limit": 3,
+            },
         },
         "activation": {
             "batch_size": 1024,
@@ -84,15 +106,24 @@ CONFIG: Dict[str, Any] = {
             "mask_assistant": True,
             "train_new_token_embeddings_only": False,
             "gradient_checkpointing": True,
-            "wandb_project": "SIDReasoner",
-            "report_to": "wandb",
+            "wandb_project": "SIDReasoner",  # 仅 report_to="wandb" 时生效
+            "report_to": "none",  # 关闭 wandb 上报(CE/GEM 的 Stage 1/2 均生效, 同 rl.use_wandb=False); 恢复改回 "wandb"
             "base_model": None,
             "out": None,
             # ---- GEM 变体(Stage 2: src.train.sidreasoner_activation_gem) ----
             # 含义同 training.sft.gem; Stage 2 GEM 默认从 GEM Stage 1 的
             # final_checkpoint 继续训练(显式配置过 training.sft.out 时需
-            # 手动把 base_model 指向对应 GEM checkpoint)
-            "gem": {"beta": 0.7, "h": "logsigmoid", "print_entropy": True},
+            # 手动把 base_model 指向对应 GEM checkpoint)。
+            # 吞吐覆盖键含义与取值理由同 sft.gem(Stage 2 全部数据
+            # cutoff 1024, micro=8 显存更宽裕)
+            "gem": {
+                "beta": 0.7,
+                "h": "logsigmoid",
+                "print_entropy": True,
+                "micro_batch_size": 8,
+                "gradient_checkpointing": True,
+                "save_total_limit": 3,
+            },
         },
     },
     "rl": {

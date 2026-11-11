@@ -190,8 +190,19 @@ def run_sft(
 
     batch_size = train_cfg["batch_size"]
     micro_batch_size = train_cfg["micro_batch_size"]
-    gradient_accumulation_steps = batch_size // micro_batch_size
+    save_total_limit = train_cfg["save_total_limit"]
     gradient_checkpointing = train_cfg.get("gradient_checkpointing", False)
+    gem_cfg = train_cfg.get("gem") or {}
+    if loss == "gem":
+        # GEM 变体专属覆盖键(吞吐调优, 见 config/sidreasoner.py 的 gem 段),
+        # 仅 loss="gem" 时生效, CE 基线路径不受影响。micro_batch_size
+        # 变大后梯度累积按卡数自动减小, 全局 batch 保持不变 -> 训练等价
+        micro_batch_size = gem_cfg.get("micro_batch_size", micro_batch_size)
+        save_total_limit = gem_cfg.get("save_total_limit", save_total_limit)
+        gradient_checkpointing = gem_cfg.get(
+            "gradient_checkpointing", gradient_checkpointing
+        )
+    gradient_accumulation_steps = batch_size // micro_batch_size
     device_map = "auto"
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     ddp = world_size != 1
@@ -227,7 +238,7 @@ def run_sft(
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         output_dir=output_dir,
-        save_total_limit=train_cfg["save_total_limit"],
+        save_total_limit=save_total_limit,
         load_best_model_at_end=True,
         ddp_find_unused_parameters=False if ddp else None,
         report_to=train_cfg.get("report_to", "wandb"),
@@ -238,11 +249,13 @@ def run_sft(
             GemTrainingArguments,
         )
 
-        gem_cfg = train_cfg.get("gem") or {}
         print(
             f"[{stage_name}] GEM loss: beta={gem_cfg.get('beta', 0.7)}, "
             f"h={gem_cfg.get('h', 'logsigmoid')}, "
-            f"print_entropy={gem_cfg.get('print_entropy', False)}"
+            f"print_entropy={gem_cfg.get('print_entropy', False)}; "
+            f"micro_batch={micro_batch_size}, "
+            f"grad_accum={gradient_accumulation_steps} "
+            f"(global batch = {micro_batch_size * gradient_accumulation_steps * max(world_size, 1)})"
         )
         trainer = GemMultiEvalTrainer(
             model=model,

@@ -43,30 +43,40 @@ office / industrial 把 `games` 换掉即可。
 make download-model        # Qwen3-1.7B; 下载后修改 config.sidreasoner 中的 model 为模型的路径
 make install-vllm          # 思考模式评估需要
 
-# 1) 三阶段训练(4 卡)
+# 1) Stage 1 & 2
 make games-sidreasoner-sft             # Stage 1: 增强式 SID-语言对齐 SFT
 make games-sidreasoner-activation      # Stage 2: 推理激活 SFT
+make games-sidreasoner-sft-gem
+make games-sidreasoner-activation-gem  # 默认接 Stage 1 GEM 的 final_checkpoint
+
+# 2) Stage 3
 make games-sidreasoner-rl              # Stage 3: GRPO 强化学习(前置见下)
 make games-sidreasoner-rl-beam         # Stage 3 变体: OneRec-Think Rollout-Beam reward(见下)
 make games-sidreasoner-rl-beam-div     # Stage 3 变体: Rollout-Beam x OneReason R_div(见下)
 
 # 挂 tmux 跑:
-make tmux TARGET=games-sidreasoner-sft SESSION=sft
+make tmux TARGET=games-sidreasoner-sft SESSION=sft-games
+make tmux TARGET=games-sidreasoner-sft-gem SESSION=sft-gem-games
+make tmux TARGET=games-sidreasoner-activation-gem SESSION=act-gem-games
+
 make tmux TARGET=games-sidreasoner-rl-beam SESSION=rl-beam-games
 make tmux TARGET=games-sidreasoner-rl-beam-div SESSION=rl-beam-div-games
+
 tmux ls                                # 1. 列出服务器上仍在跑的会话
 tmux attach -t sft                     # 2. 接回对应会话(Ctrl-b d 只退出查看, 不停任务)
 tmux kill-session -t sft               # 3. 清理会话
 
-# 2) 合并 Stage 3 的 FSDP 分片 checkpoint
+# 3) 合并 Stage 3 的 FSDP 分片 checkpoint
 make games-sidreasoner-merge
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_div
 
-# 3) 思考模式评估 + 计算指标
+# 4) 思考模式评估 & 计算指标 & 画图
 make games-sidreasoner-think \
     MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B/global_step_100/actor_merged
 make games-sidreasoner-metrics         # 自动取最新 think 结果, 可用 RESULT=xxx.json 指定
+make games-sidreasoner-curves          # 默认画全部: NDCG@5/10, HR@5/10
+make games-sidreasoner-curves ARGS="--metric NDCG@10"
 
 # 非思考模式: MODEL 取 stage1 / stage2 / 任意 checkpoint 路径
 make games-sidreasoner-eval MODEL=stage2
@@ -85,9 +95,9 @@ make games-sidreasoner-activation-gem    # Stage 2 GEM(默认接 Stage 1 GEM 的
 ```
 
 - 超参: `config/sidreasoner.py` 的 `training.sft.gem` / `training.activation.gem`(`beta=0.7`、`h="logsigmoid"` = 官方论文/脚本默认)
+- 提速(2x A800-80G): gem 段的 `micro_batch_size: 8` 仅对 GEM 运行生效(CE 基线仍为 1/2), 梯度累积自动 512/256→64 补偿, 全局 batch 仍 1024、训练等价; 显存吃紧(3072-token 通用子集)可降为 4。GEM 需物化多个全词表张量(峰值额外 30GB+), 故 `gradient_checkpointing` 保持 True
 - 显式配置过 `training.sft.out` 时, Stage 2 GEM 需手动把 `training.activation.base_model` 指到 GEM Stage 1 checkpoint
-- 监控: `loss`(GEM)与 `ce_loss` 应同步下降; `entropy` 下降慢于 CE 基线即多样性保留生效
-- GEM 需对全词表做 softmax, 单卡额外约 2-3 GB(micro_batch=1, seq 1024), 80 GB 卡无压力
+- 监控: `loss`(GEM)与 `ce_loss` 应同步下降; `entropy` 下降慢于 CE 基线即多样性保留生效; `print_entropy` 有百分之几开销, 极限提速可关
 
 ## 评测结果目录结构(两级路由)
 
