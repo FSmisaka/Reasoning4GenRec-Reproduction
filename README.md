@@ -98,6 +98,7 @@ make games-sidreasoner-activation-gem    # Stage 2 GEM(默认接 Stage 1 GEM 的
 - 提速(2x A800-80G): gem 段的 `micro_batch_size: 8` 仅对 GEM 运行生效(CE 基线仍为 1/2), 梯度累积自动 512/256→64 补偿, 全局 batch 仍 1024、训练等价; 显存吃紧(3072-token 通用子集)可降为 4。GEM 需物化多个全词表张量(峰值额外 30GB+), 故 `gradient_checkpointing` 保持 True
 - 显式配置过 `training.sft.out` 时, Stage 2 GEM 需手动把 `training.activation.base_model` 指到 GEM Stage 1 checkpoint
 - 监控: `loss`(GEM)与 `ce_loss` 应同步下降; `entropy` 下降慢于 CE 基线即多样性保留生效; `print_entropy` 有百分之几开销, 极限提速可关
+- 评测: `make games-sidreasoner-think MODEL=runs/sidreasoner/Video_Games_stage1_sft_gem/final_checkpoint` -> 结果自动路由到 `results/sidreasoner/Games/sft_gem/stage1.json`(原始 SFT -> `sft/stage1.json`, 见下节路由表)
 
 ## 评测结果目录结构(两级路由)
 
@@ -112,6 +113,10 @@ results/sidreasoner/
     nonthink/               step_100.json            # 非思考模式(eval.sh)
     le3/                    eval_stage2.json         # 短历史(<=3)子集,
                             think_stage2.json       #   eval/think 双模式对照
+    sft/                    stage1.json              # Stage 1/2 SFT(原始 CE)思考模式
+                            stage2.json
+    sft_gem/                stage1.json              # Stage 1/2 SFT(GEM 变体)思考模式
+                            stage2.json
     think_steprule/         step_100.json            # 原始 Stage3(StepRule)思考模式
     think_rolloutbeam/      step_900.json            # Rollout-Beam reward 思考模式
     think_rolloutbeam_div/  step_1500.json           # + OneReason R_div 思考模式
@@ -119,9 +124,13 @@ results/sidreasoner/
                             step_100_summary.json    #   多 seed 汇总
 ```
 
-- **变体自动推断**: 从 MODEL 路径的实验名后缀识别
-  (`_rolloutbeam` / `_rolloutbeam_div` / 无后缀=steprule; stage1/2 也归
-  steprule 系); 温度>0 时自动落到 `think_<变体>_temp`。
+- **变体自动推断**: 从 MODEL 路径的实验名后缀识别。Stage 1/2 训练目录
+  (`*_stage1_sft` / `*_stage2_activation`)归 `sft`, 带 `_gem` 后缀归
+  `sft_gem`; Stage 3 按 `_rolloutbeam` / `_rolloutbeam_div` / 无后缀
+  =steprule; 温度>0 时自动落到 `<变体>_temp`(SFT 系为 `sft_temp` /
+  `sft_gem_temp`)。例: `make games-sidreasoner-think
+  MODEL=runs/sidreasoner/Video_Games_stage1_sft_gem/final_checkpoint`
+  -> `Games/sft_gem/stage1.json`。
 - **存量文件一键归档**: `make sidreasoner-organize`(先 `DRY_RUN=1`
   预览); 旧 think 文件默认归 `think_steprule`, 确知来自 beam 模型的
   请手动挪到对应目录。

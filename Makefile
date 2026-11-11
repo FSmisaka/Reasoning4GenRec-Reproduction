@@ -160,9 +160,9 @@ endef
 
 define SIDREASONER_METRICS_TARGET
 $(1)-sidreasoner-metrics:
-	@R="$$$${RESULT:-$$$$(ls -t results/sidreasoner/$(3)/think_*/*.json 2>/dev/null | grep -v '_seed' | head -n 1)}"; \
+	@R="$$$${RESULT:-$$$$(ls -t results/sidreasoner/$(3)/think_*/*.json results/sidreasoner/$(3)/sft*/*.json 2>/dev/null | grep -v '_seed' | head -n 1)}"; \
 	if [ -z "$$$${R}" ]; then \
-		echo "未找到 results/sidreasoner/$(3)/think_*/*.json, 先运行 make $(1)-sidreasoner-think"; \
+		echo "未找到 results/sidreasoner/$(3)/think_*/*.json 或 $(3)/sft*/*.json, 先运行 make $(1)-sidreasoner-think"; \
 		exit 1; \
 	fi; \
 	echo "metrics: $$$${R}"; \

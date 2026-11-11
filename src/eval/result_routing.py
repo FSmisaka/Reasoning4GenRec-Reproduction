@@ -9,13 +9,16 @@ results/sidreasoner/ 下的产物统一组织为::
 第二层 <variant>(评测类型 x 训练变体):
     nonthink                非思考模式评测
     le3                     短历史(history <= 3)子集评测(eval/think 双模式对照)
+    sft                     Stage 1/2 SFT(原始 CE)思考模式评测
+    sft_gem                 Stage 1/2 SFT(GEM 损失变体)思考模式评测
     think_steprule          原始 SIDReasoner(StepRule reward)思考模式
     think_rolloutbeam       Rollout-Beam reward(OneRec-Think)思考模式
     think_rolloutbeam_div   Rollout-Beam x OneReason R_div 思考模式
     think_steprule_temp     原始 SIDReasoner 思考模式 + 采样温度(temperature > 0)
 
     泛化规则(按需自动创建, 不在固定清单内):
-    - 思考模式 + temperature > 0 -> think_<variant>_temp
+    - 思考模式 + temperature > 0 -> <variant>_temp(sft 系同样: sft_temp /
+      sft_gem_temp)
     - 短历史阈值非 3 时 -> le<N>
 
 <文件> 不再含数据集名(上层目录已有), 必含 step 数(从模型路径中的
@@ -69,9 +72,17 @@ def model_step_label(model) -> str:
 def variant_of_model(model) -> str:
     """从模型路径(实验目录名)推断训练变体。
 
-    checkpoints/RecRL_Reasoning/<C>_stage3_rl_Qwen3-1.7B[_own][_rolloutbeam[_div]]
+    Stage 1/2 SFT checkpoint(runs/sidreasoner/
+    <C>_stage{1_sft,2_activation}[_own][_gem]/final_checkpoint)
+    -> "sft" / "sft_gem"(GEM 损失变体);
+
+    Stage 3 RL(checkpoints/RecRL_Reasoning/
+    <C>_stage3_rl_Qwen3-1.7B[_own][_rolloutbeam[_div]])
+    -> "steprule" / "rolloutbeam" / "rolloutbeam_div"。
     """
     path = str(model or "")
+    if re.search(r"stage[12]_(sft|activation)", path):
+        return "sft_gem" if "_gem" in path else "sft"
     if "_rolloutbeam_div" in path:
         return "rolloutbeam_div"
     if "_rolloutbeam" in path:
@@ -91,9 +102,11 @@ def result_dir(category, kind, model=None, temperature=0.0, max_len=None) -> str
         return "nonthink"
     if kind == "think":
         variant = variant_of_model(model)
-        if temperature and float(temperature) > 0:
-            return f"think_{variant}_temp"
-        return f"think_{variant}"
+        temp_sfx = "_temp" if temperature and float(temperature) > 0 else ""
+        if variant in ("sft", "sft_gem"):
+            # SFT 阶段思考模式评测: 不带 think_ 前缀(sft / sft_gem)
+            return f"{variant}{temp_sfx}"
+        return f"think_{variant}{temp_sfx}"
     raise ValueError(f"未知 kind: {kind!r}(可选 nonthink / think / short)")
 
 

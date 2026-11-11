@@ -47,6 +47,29 @@ def test_variant_of_model():
     assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_own_rolloutbeam_div/global_step_100/actor_merged") == "rolloutbeam_div"
 
 
+def test_variant_of_model_sft():
+    # Stage 1/2 SFT checkpoint -> sft / sft_gem(按训练目录名识别)
+    assert variant_of_model(
+        "runs/sidreasoner/Video_Games_stage1_sft/final_checkpoint"
+    ) == "sft"
+    assert variant_of_model(
+        "runs/sidreasoner/Video_Games_stage2_activation/final_checkpoint"
+    ) == "sft"
+    assert variant_of_model(
+        "runs/sidreasoner/Video_Games_stage1_sft_gem/final_checkpoint"
+    ) == "sft_gem"
+    assert variant_of_model(
+        "runs/sidreasoner/Video_Games_stage2_activation_gem/final_checkpoint"
+    ) == "sft_gem"
+    # 自建 SID 后缀在 _gem 之前, 也能识别
+    assert variant_of_model(
+        "runs/sidreasoner/Video_Games_stage1_sft_own_gem/final_checkpoint"
+    ) == "sft_gem"
+    assert variant_of_model(
+        "runs/sidreasoner/Office_Products_stage1_sft_own/final_checkpoint"
+    ) == "sft"
+
+
 def test_result_dir_six_kinds():
     beam = ".../Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam/global_step_1/actor_merged"
     div = ".../Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam_div/global_step_1/actor_merged"
@@ -62,6 +85,17 @@ def test_result_dir_six_kinds():
     assert result_dir("Video_Games", "short", max_len=5) == "le5"
 
 
+def test_result_dir_sft_variants():
+    # SFT 阶段思考模式: 无 think_ 前缀(sft / sft_gem); 温度泛化 sft_temp
+    s1 = "runs/sidreasoner/Video_Games_stage1_sft/final_checkpoint"
+    s1g = "runs/sidreasoner/Video_Games_stage1_sft_gem/final_checkpoint"
+    s2g = "runs/sidreasoner/Video_Games_stage2_activation_gem/final_checkpoint"
+    assert result_dir("Video_Games", "think", model=s1) == "sft"
+    assert result_dir("Video_Games", "think", model=s1g) == "sft_gem"
+    assert result_dir("Video_Games", "think", model=s2g) == "sft_gem"
+    assert result_dir("Video_Games", "think", model=s1g, temperature=1.5) == "sft_gem_temp"
+
+
 def test_build_result_path_think():
     p = build_result_path(
         "Video_Games", "think",
@@ -75,6 +109,33 @@ def test_build_result_path_think():
         sid_sfx="_own",
     )
     assert p == "results/sidreasoner/Games/think_rolloutbeam/step_900_own.json"
+
+
+def test_build_result_path_think_sft():
+    # 原始 SFT(CE): sft/stage{1,2}.json
+    assert build_result_path(
+        "Video_Games", "think",
+        "runs/sidreasoner/Video_Games_stage1_sft/final_checkpoint",
+    ) == "results/sidreasoner/Games/sft/stage1.json"
+    assert build_result_path(
+        "Video_Games", "think",
+        "runs/sidreasoner/Video_Games_stage2_activation/final_checkpoint",
+    ) == "results/sidreasoner/Games/sft/stage2.json"
+    # GEM SFT: sft_gem/stage{1,2}.json
+    assert build_result_path(
+        "Video_Games", "think",
+        "runs/sidreasoner/Video_Games_stage1_sft_gem/final_checkpoint",
+    ) == "results/sidreasoner/Games/sft_gem/stage1.json"
+    assert build_result_path(
+        "Video_Games", "think",
+        "runs/sidreasoner/Video_Games_stage2_activation_gem/final_checkpoint",
+    ) == "results/sidreasoner/Games/sft_gem/stage2.json"
+    # 自建 SID 后缀附加在文件名
+    assert build_result_path(
+        "Video_Games", "think",
+        "runs/sidreasoner/Video_Games_stage2_activation_own_gem/final_checkpoint",
+        sid_sfx="_own",
+    ) == "results/sidreasoner/Games/sft_gem/stage2_own.json"
 
 
 def test_build_result_path_nonthink_and_short():
