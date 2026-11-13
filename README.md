@@ -477,99 +477,38 @@ DATASET=games SID=own     make games-sid-switch   # 切回自建 SID
 
 # 6. 思维链多样性分析(SIDReasoner)
 
-观察"不同用户的思维链高度雷同"这一多样性问题, 对三个对象做统计对比:
-**teacher**(Stage 2 训练数据中教师模型的思维链)、**stage2** / **stage3**
-(对应阶段模型在测试集上输出的思维链)。两个阶段, 产物均在
-`results/diversity/<Category>/`(语料 `corpora/*.jsonl` + `analysis.json`
-+ `report.md`):
+观察"不同用户的思维链高度雷同"这一多样性问题。分析命令**单文件输入**:
+一份思考模式评测结果 JSON(逐条记录、含 `cot` 字段), 结果**镜像路由**到
+`results/diversity/` 下的同名子路径, 只产出一个分析 JSON:
 
-```bash
-# ① 采集语料(默认 teacher + 本地 stage2 checkpoint; MPS/CUDA 均可,
-#    复刻 think 评测的 prompt, 贪心生成到 </think>, 无需 vllm)
-make games-diversity-collect NUM=300
-#    stage3 两种方式: 本地生成或导入服务器 think 结果(含全部三个对象)
-MODEL_SPECS="stage3=<stage3 checkpoint 路径>" make games-diversity-collect
-IMPORT_SPECS="stage3=results/sidreasoner/Games/think_steprule/step_1900.json" \
-    FORCE=1 make games-diversity-collect
-
-# ② 统计报告: TF-IDF 词频 / bigram 频率 / TTR 与 distinct-n / 熵 /
-#    完全重复率 / 成对 TF-IDF 余弦与 3-gram Jaccard / 首句模板集中度 /
-#    gzip 压缩率 / 最相似样本对示例; text 与 raw(含 SID)双视角;
-#    词汇类指标(TTR/distinct/熵/词表)与 gzip/Jaccard 另有"去停用词"
-#    对照版(*_content 键 / 报告第三张对比表)
-make games-diversity-report
+```
+输入  results/sidreasoner/Games/think_steprule/step_1900.json
+输出  results/diversity/Games/think_steprule/step_1900.json   # {"text","raw","meta"}
 ```
 
-- 同一 `NUM`/`SEED` 下各模型的测试用户采样一致, stage2/stage3 可比;
-  生成预算默认 512 token(`MAX_NEW_TOKENS=256` 对齐官方 think 评测)。
-- 复跑换参数: `FORCE=1 NUM=500 make games-diversity-collect`。
-
-## 服务器全量分析(复用已算好的 think JSON, 无需 GPU/vllm)
-
-若服务器上已跑过思考评测, 直接导入其结果做全量统计(think JSON 的
-`cot` 字段即思维链; teacher 从 CSV 取全部约 4.9 万行):
-
 ```bash
-# ① 采集: 全量 teacher + 导入 stage2/stage3 的 think 结果
-DATASET=games .venv/bin/python -m src.analysis.collect_diversity_corpora \
-    --teacher --num -1 --force \
-    --import stage2=results/sidreasoner/Games/think_steprule/stage2.json \
-    --import stage3=results/sidreasoner/Games/think_steprule/step_1900.json
-# 或经 make: IMPORT_SPECS="stage2=results/sidreasoner/Games/think_steprule/stage2.json,stage3=results/sidreasoner/Games/think_steprule/step_1900.json" \
-#   TEACHER=1 NUM=-1 FORCE=1 make games-diversity-collect
-
-# ② 全量统计报告(--full = 不截采样文档; 成对指标仍受 PAIR_CAP 限制,
-#    全量语料每语料约 15s + 内存 ~1.6GB, PAIR_CAP=2000 时 Jaccard 约再 +1min)
-DATASET=games .venv/bin/python -m src.analysis.diversity_report \
-    --full --pair-cap 2000
-# 或: FULL=1 PAIR_CAP=2000 make games-diversity-report
+# 直接运行
+.venv/bin/python -m src.analysis.diversity_analysis \
+    results/sidreasoner/Games/think_steprule/step_1900.json
+# 或经 make(等价, 环境变量传参)
+INPUT=results/sidreasoner/Games/think_steprule/step_1900.json \
+    PAIR_CAP=2000 DEVICE=cuda make games-diversity-analyze
 ```
 
-- **等量化(默认开)**: teacher 全量(4.9 万)与 think 结果(6142)规模不同,
-  而 TTR/distinct/熵/gzip 等语料级指标随语料变大单调走低, 直接对比会
-  失真。报告默认把所有语料按 seed 采样到与最小语料相同的篇数
-  (各语料的采集总量/统计量分别记录在其小节与 `analysis.json` 的
-  `meta.n_docs_collected/n_docs_analyzed`);`--no-equalize` 可关闭。
-- 导入的语料 `user_id` 为 `#行号`(官方 think JSON 不含该字段)。
-- 全量数值与采样 300 的数值不可直接对调着比(语料级指标依赖规模),
-  对比请始终在同一份 report 内进行。
-
-## 温度对照实验(检验"teacher 多样性是否来自采样温度")
-
-采集脚本支持采样生成: `SAMPLING=default`(模型 generation_config 自带,
-Qwen3 默认 T=0.6, top_p=0.95, top_k=20)或 `SAMPLING=1.0`(指定温度)。
-对照语料命名加 `_temp` 后缀, 与贪心语料并存; 统计结果用 `--out`
-写到独立文件, 不覆盖贪心版:
-
-```bash
-# ① 服务器上(A800, 全量测试集, bf16, 大 batch)生成采样版语料
-#    注意 Stage 3 checkpoint 在 checkpoints/ 下(merge 后的 actor_merged),
-#    不在 runs/ 下; step 数以实际训练为准(先 ls 确认)
-DATASET=games SAMPLING=default NUM=-1 BATCH_SIZE=64 \
-    FORCE=1 MODEL_SPECS="stage2_temp=runs/sidreasoner/Video_Games_stage2_activation/final_checkpoint,stage3_temp=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B/global_step_1900/actor_merged" \
-    make games-diversity-collect
-# ② 同一套统计, 输出 analysis_temp.json / analysis_temp.md
-#    (corpora 全部参与: teacher + 贪心 stage2/stage3 + 采样 *_temp, 等量化对齐)
-DATASET=games FULL=1 PAIR_CAP=2000 DEVICE=cuda OUT=analysis_temp.json \
-    make games-diversity-report
-```
-
-解读: 若 `*_temp` 的首句唯一率/成对余弦明显接近 teacher, 说明先前差距
-有相当部分是"贪心 vs 采样"的解码混杂; 若仍与贪心版接近, 则多样性
-坍缩是模型分布的属性, 与解码温度无关。
-
-- 配套工具 `src/analysis/dup_decomposition.py`: 把首句重复分解为
-  "同用户多余行 vs 跨用户"两种来源(行归属/配对归属双口径),
-  用于检验"重复是否来自同一用户的级联测试行"。对贪心与采样语料
-  各跑一遍即可对比温度的影响:
-  `DATASET=games .venv/bin/python -m src.analysis.dup_decomposition --corpora stage2,stage3,stage2_temp,stage3_temp`
-  (经 --import 导入的语料 user_id 是 #行号, 同用户口径恒为 0, 不适用)
-
-- games 上的初步结论(300 条, seed 42, 三语料同测试用户): stage2 相对
-  teacher, TTR 减半(0.024 vs 0.045)、distinct-2 减半(0.139 vs 0.296)、
-  成对余弦均值 +50%(0.285 vs 0.189)、gzip 率更低、首句模板 Top5 覆盖
-  4 倍(6.7% vs 1.7%), 且出现逐字相同的输出(完全重复率 0.7%)——
-  SFT 后模型输出显著比教师数据更同质; stage3(GRPO 后)各项词汇多样性
-  指标与 stage2 几乎持平(TTR 0.024 / distinct-2 0.143 / 余弦 0.279),
-  但首句模板进一步固化(Top1 覆盖 5.3% vs 1.3%, Top5 12.3% vs 6.7%)——
-  RL 未修复多样性坍缩, 反而加剧了开头句式的集中。
+- 统计内容(每份输出含 text/raw 双视角, text=剔除 SID 只看自然语言,
+  raw=保留 SID): TF-IDF 词频与 bigram 频率 Top、TTR/distinct-1,2/熵
+  (含停用词 `lexical` 与去停用词 `lexical_content` 双口径)、完全重复率、
+  成对 TF-IDF 余弦与 3-gram Jaccard(亦有去停用词版)、首句模板集中度
+  (`openers` SID 泛化 / `openers_strict` 原样双口径)、gzip 压缩率、
+  最相似样本对 Top-3; `meta` 记录输入路径/文档数/闭合率/统计参数。
+- 输入要求: 逐条记录的 think 结果(贪心单文件或多 seed 的单 seed 明细,
+  后者需置 `evaluation.save_per_seed_results: true`); `_summary.json`
+  是跨 seed 聚合、无逐条 cot, 不能作为输入(脚本会明确报错)。
+- 性能: 全量 6142 条秒级; 成对指标受 `PAIR_CAP` 限制(默认 600, 0=不限),
+  GPU(cuda/mps)自动走 torch 矩阵乘, `DEVICE=cuda` 强制。
+- 无中间文件: 不再落盘 corpora/markdown; 旧版三语料对比流程
+  (teacher/stage2/stage3 采集 + report.md)已移除。
+- 早期结论存档(games, 300 条贪心采样): stage2 相对 teacher TTR 减半
+  (0.024 vs 0.045)、成对余弦均值 +50%(0.285 vs 0.189)、首句模板 Top5
+  覆盖 4 倍; stage3(GRPO 后)词汇多样性持平但首句模板进一步固化
+  (Top1 5.3% vs 1.3%)——多样性坍缩发生在 Stage 2 SFT 且延续到 RL。
