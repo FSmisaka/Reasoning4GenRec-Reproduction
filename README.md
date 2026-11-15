@@ -108,7 +108,7 @@ make games-sidreasoner-think MODEL=runs/sidreasoner/Video_Games_stage1_sft_gem/f
 
 ```bash
 make sidreasoner-organize        # 旧版平铺结果一键归档(DRY_RUN=1 预览)
-make games-sidreasoner-curves    # Stage 3 各变体训练曲线对比(需 pip install matplotlib)
+make games-sidreasoner-curves    # 训练曲线: 默认 5 条线, _temp 为 95% CI 带, 金色水平线=论文值
 ```
 
 ## 思考模式评估: 采样解码 + 多 seed 指标(默认)

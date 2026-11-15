@@ -31,17 +31,20 @@ def write_greedy(path):
     path.write_text(json.dumps(data))
 
 
-def write_summary(path, mean):
-    """伪造采样评测 summary(aggregate.metrics 含 mean/std)。"""
+def write_summary(path, mean, half=0.02):
+    """伪造采样评测 summary(aggregate.metrics 含 mean/95% CI)。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
         "aggregate": {
             "metrics": {
-                "NDCG@10": {"mean": mean, "std": 0.01,
-                            "ci95_lower": mean - 0.02, "ci95_upper": mean + 0.02},
-                "NDCG@5": {"mean": mean, "std": 0.01},
-                "HR@10": {"mean": mean, "std": 0.01},
-                "HR@5": {"mean": mean, "std": 0.01},
+                "NDCG@10": {"mean": mean, "std": half / 2,
+                            "ci95_lower": mean - half, "ci95_upper": mean + half},
+                "NDCG@5": {"mean": mean, "std": half / 2,
+                           "ci95_lower": mean - half, "ci95_upper": mean + half},
+                "HR@10": {"mean": mean, "std": half / 2,
+                          "ci95_lower": mean - half, "ci95_upper": mean + half},
+                "HR@5": {"mean": mean, "std": half / 2,
+                         "ci95_lower": mean - half, "ci95_upper": mean + half},
             }
         }
     }
@@ -55,14 +58,17 @@ def fake_results(tmp_path, monkeypatch):
     games = root / "Games"
 
     # rolloutbeam: 100-500 全有; rolloutbeam_div: 只有 100-300(验证截断);
-    # steprule: 100-500, 用 summary(采样评测) 验证 aggregate 路径
+    # steprule(_temp) 与 rolloutbeam_temp: 用 summary(采样评测) 验证 CI 路径
     for step in (100, 200, 300, 400, 500):
         write_greedy(games / "think_rolloutbeam" / f"step_{step}.json")
     for step in (100, 200, 300):
         write_greedy(games / "think_rolloutbeam_div" / f"step_{step}.json")
     for step in (100, 200, 300, 400, 500):
-        write_summary(games / "think_steprule" / f"step_{step}_summary.json",
+        write_summary(games / "think_steprule_temp" / f"step_{step}_summary.json",
                       mean=0.4 + step / 100 * 0.01)
+    for step in (100, 200, 300):
+        write_summary(games / "think_rolloutbeam_temp" / f"step_{step}_summary.json",
+                      mean=0.3 + step / 100 * 0.02)
 
     # info 文件 + 数据根目录(挂到 config 的 data.root)
     data_root = tmp_path / "data"
@@ -107,18 +113,20 @@ def test_series_points_greedy_and_summary(fake_results):
     item_names = load_item_names(
         str(fake_results.parent.parent / "data" / "info" / "Video_Games_5_2016-10-2018-11")
     )
-    # 贪心: 4 样本命中 2 -> HR@5 = HR@10 = 0.5; NDCG@K = 0.5/log2(2)/... 命中在首位
+    # 贪心: 4 样本命中 2 -> HR@5 = HR@10 = 0.5; 命中在首位
     pts = curves.series_points(str(fake_results / "Games" / "think_rolloutbeam"),
                                item_names, "HR@10")
     assert [p[0] for p in pts] == [100, 200, 300, 400, 500]
     assert all(abs(p[1] - 0.5) < 1e-6 for p in pts)
-    assert all(p[2] is None for p in pts)
+    assert all(p[2] is None and p[3] is None for p in pts)
 
-    # summary: 取 aggregate mean, 带 std
-    pts = curves.series_points(str(fake_results / "Games" / "think_steprule"),
+    # summary: 取 aggregate mean + 95% CI(ci95_lower/ci95_upper)
+    pts = curves.series_points(str(fake_results / "Games" / "think_steprule_temp"),
                                item_names, "NDCG@10")
     assert [p[0] for p in pts] == [100, 200, 300, 400, 500]
-    assert pts[0][2] == 0.01
+    assert pts[0][1] == pytest.approx(0.4 + 0.01)
+    assert pts[0][2] == pytest.approx(pts[0][1] - 0.02)
+    assert pts[0][3] == pytest.approx(pts[0][1] + 0.02)
 
 
 def test_paper_baseline_table():

@@ -5,8 +5,8 @@ results/sidreasoner/<Dataset>/figures/<指标>.png。
 
 数据来源(与评测产物结构一一对应, 无需额外记录):
 - think_<variant>/step_N.json          贪心评测 -> 逐样本记录, 现场重算指标
-- think_<variant>_temp/step_N_summary  采样评测 -> aggregate.metrics[指标].mean
-  (同时画 std 置信带)
+- think_<variant>_temp/step_N_summary  采样评测 -> mean 折线 + 95% 置信区间
+  浅色高透明带(alpha=0.15)
 
 指标可选: NDCG@5 / NDCG@10 / HR@5 / HR@10(Recall/HitRate 均识别为 HR;
 重算走 sidreasoner_metrics.compute_metrics, K 需不超过评测束宽 10)。
@@ -61,13 +61,19 @@ SUPPORTED_METRICS = ("NDCG@5", "NDCG@10", "HR@5", "HR@10")
 
 # 曲线注册表: 以后加新折线只需在此追加一行(label=图例, subdir=结果子目录)。
 # 也可在调用 plot_rl_metric(series=...) 时整体替换/增删。
+# _temp 系列(采样评测)的 step_N_summary.json 含 95% 置信区间,
+# 以浅色高透明带绘制; 颜色与对应贪心变体同色、点线区分。
 DEFAULT_SERIES = [
     {"label": "Rollout-Beam (OneRec-Think)",
      "subdir": "think_rolloutbeam", "color": C_BLUE, "ls": "-", "marker": "o"},
     {"label": "Rollout-Beam x R_div (OneReason)",
      "subdir": "think_rolloutbeam_div", "color": C_RED, "ls": "--", "marker": "s"},
-    {"label": "StepRule (SIDReasoner)",
+    {"label": "StepRule (原始 SIDReasoner)",
      "subdir": "think_steprule", "color": C_GRAY, "ls": "-.", "marker": "^"},
+    {"label": "Rollout-Beam (温度采样)",
+     "subdir": "think_rolloutbeam_temp", "color": C_BLUE, "ls": ":", "marker": "v"},
+    {"label": "StepRule (温度采样)",
+     "subdir": "think_steprule_temp", "color": C_GRAY, "ls": ":", "marker": "D"},
 ]
 
 # SIDReasoner 官方论文(arXiv:2603.23183, Table 2)思考模式的最终结果,
@@ -142,10 +148,12 @@ def _step_files(subdir_path: str):
 
 
 def series_points(subdir_path, item_names, metric_key):
-    """一条折线的 (step, value[, std]) 序列, 按 step 升序。
+    """一条折线的 (step, mean, ci95_lower, ci95_upper) 序列, 按 step 升序。
 
-    优先用采样评测的 summary(mean/std), 否则对贪心评测的逐样本记录
-    现场调用 compute_metrics 重算。缺 step 的折线自然到此截断。
+    - 采样评测(step_N_summary.json): 直接取 aggregate.metrics 的
+      mean / ci95_lower / ci95_upper(95% 置信区间);
+    - 贪心评测(step_N.json): 逐样本记录现场重算, 无置信区间(后两项为 None)。
+    缺 step 的折线自然到此截断。
     """
     pts = []
     for step, (greedy, summary) in sorted(_step_files(subdir_path).items()):
@@ -155,8 +163,12 @@ def series_points(subdir_path, item_names, metric_key):
             if metric_key not in agg:
                 print(f"[warn] {summary}: 无指标 {metric_key}, 跳过")
                 continue
-            pts.append((step, float(agg[metric_key]["mean"]),
-                        float(agg[metric_key].get("std", 0.0))))
+            m = agg[metric_key]
+            lo = m.get("ci95_lower")
+            hi = m.get("ci95_upper")
+            pts.append((step, float(m["mean"]),
+                        None if lo is None else float(lo),
+                        None if hi is None else float(hi)))
         else:
             with open(greedy, "r") as f:
                 test_data = json.load(f)
@@ -164,7 +176,7 @@ def series_points(subdir_path, item_names, metric_key):
             if metric_key not in mets:
                 print(f"[warn] {greedy}: 无指标 {metric_key}(束宽不足?), 跳过")
                 continue
-            pts.append((step, float(mets[metric_key]), None))
+            pts.append((step, float(mets[metric_key]), None, None))
     return pts
 
 
@@ -216,21 +228,22 @@ def plot_rl_metric(
             continue
         steps = [p[0] for p in pts]
         vals = [p[1] for p in pts]
-        stds = [p[2] for p in pts]
+        lowers = [p[2] for p in pts]
+        uppers = [p[3] for p in pts]
         all_steps.extend(steps)
         ax.plot(steps, vals, color=s.get("color", C_GOLD), ls=s.get("ls", "-"),
                 marker=s.get("marker", "o"), ms=3.5, lw=1.3,
                 markeredgewidth=0.9, markerfacecolor="white",
                 label=s["label"])
-        # 采样评测(summary)带 std 时画置信带
-        if any(st and st > 0 for st in stds):
-            ax.fill_between(steps,
-                            [v - st for v, st in zip(vals, stds)],
-                            [v + st for v, st in zip(vals, stds)],
-                            color=s.get("color", C_GOLD), alpha=0.13, lw=0)
+        # 采样评测(summary 带 95% 置信区间): 画浅色高透明的置信带
+        if any(lo is not None for lo in lowers):
+            ax.fill_between(steps, lowers, uppers,
+                            color=s.get("color", C_GOLD), alpha=0.15, lw=0)
+        ci_txt = (f", 95%CI 半宽~{(uppers[0] - lowers[0]) / 2:.4f}"
+                  if lowers[0] is not None else "")
         print(f"[{ds_dir}/{s['subdir']}] {len(pts)} 个点: "
               f"step {steps[0]}-{steps[-1]}, {metric_key} "
-              f"{min(vals):.4f}~{max(vals):.4f}")
+              f"{min(vals):.4f}~{max(vals):.4f}{ci_txt}")
         plotted += 1
 
     if plotted == 0:
@@ -259,7 +272,8 @@ def plot_rl_metric(
         ax.spines[sp].set_visible(False)
 
     # 图例置于图片下方(outside lower center + constrained_layout, 不与内容重叠)
-    fig.legend(loc="outside lower center", ncol=min(4, n_handles),
+    fig.legend(loc="outside lower center",
+               ncol=3 if n_handles >= 5 else min(4, n_handles),
                frameon=False, columnspacing=1.4, handlelength=1.8)
 
     if out_path is None:
