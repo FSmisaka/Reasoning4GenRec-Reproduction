@@ -49,7 +49,7 @@ def topk_neighbors(
     user_embeddings: torch.Tensor,
     k: int,
     exclude: torch.Tensor = None,
-    device: str = None,
+    device: str = "cpu",
 ):
     """每个 query 的 top-K 相似用户(余弦)。
 
@@ -57,14 +57,14 @@ def topk_neighbors(
         user_embeddings: (B, D) float, 已 L2 归一化。
         k: 邻居数(不足时按实际可用数返回)。
         exclude: (B, B) bool True=不可作为邻居(自身/同用户)。
+        device: 默认 cpu —— reward 在 verl driver 进程计算, BxB 的矩阵乘
+            在 CPU 上是微秒级; 默认用 cuda 反而会在 colocated 的 GPU 0 上
+            建 CUDA context(几百 MB), 挤占已调满的显存预算。
 
     Returns:
         neighbor_idx: (B, k') long(k' = min(k, B-1)), 不足的槽位填 -1;
         neighbor_sim: (B, k') float 对应相似度, 无效槽位为 NaN。
     """
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
     u = user_embeddings.to(device=device, dtype=torch.float32)
     b = u.shape[0]
     if b < 2:

@@ -56,8 +56,10 @@ class InterQueryDiversityAddon:
         metrics_path: str = None,
         log_every: int = 1,
         seed: int = 0,
-        device: str = None,
+        device: str = "cpu",
     ):
+        """device 仅用于 BxB 邻居矩阵乘, 默认 cpu: reward 在 verl driver
+        进程执行, 默认用 cuda 会在 colocated GPU 上建 context 挤占显存。"""
         self.store = UserEmbeddingStore(user_embedding_path)
         self.top_k = int(top_k_neighbors)
         self.same_user_jaccard = float(same_user_jaccard)
