@@ -190,6 +190,34 @@ CONFIG: Dict[str, Any] = {
             "format_reward_weight": 0.0,  # 采样 SID 合法性的附加格式分(论文无此项, >0 时按 DATASET 自动找 info 文件)
             "div_level": 1,             # rollout_beam_div: 计算去重的 SID 层(1=首层 <a_*>, OneReason 论文设定)
         },
+        # ---- 跨 Query CoT 多样性奖励(DIVER 改造版, 默认关闭) ----
+        # 开启时 rl.sh 自动: reward 入口切到
+        # src/reward/direct_recommendation_interdiv.py + verl 自带
+        # reward_manager=batch(整个逻辑 batch 一次传入), 原 reward 逐行
+        # 复用不变; 关闭时 Stage 3 行为与改造前完全一致(本块可整块删掉)。
+        # 离线 User Embedding: make <dataset>-sidreasoner-user-embed
+        # (src/data/sidreasoner_user_embed.py, 以 Stage 3 parquet 的
+        # prompt 为源, 按 (split, extra_info.index) 对齐, 无目标物品泄漏)。
+        "inter_query_diversity": {
+            "enable": False,
+            "user_encoder_type": "sasrec",  # sasrec | bge_mean(src/reward/user_represent/)
+            "user_embedding_path": None,    # 默认 runs/sidreasoner/user_embed/<Category>_<encoder>.npz
+            "top_k_neighbors": 8,           # in-batch 相似用户数 K
+            "same_user_jaccard": 0.8,       # 历史物品集合 Jaccard >= 该值视为同一用户(排除)
+            "lambda_init": 0.2,             # 多样性奖励初始权重
+            "lambda_final": 0.0,            # 最终权重(线性衰减)
+            "decay_steps": 300,             # 权重衰减步数(train batch 数)
+            "gamma": 1.0,                   # 折扣因子(默认 1.0 = 不折扣; <1 需 model_path tokenizer)
+            "sigma": 0.5,                   # intrinsic 裁剪上界
+            "bleu_div_len": 1000,           # DIVER BLEU 参与比较的 CoT 前缀字符数
+            "seed": 0,                      # reference CoT 随机选择的 RNG 种子
+            "metrics_path": None,          # 默认 embedding 同目录 interdiv_metrics.jsonl
+            "log_every": 1,                 # 摘要打印间隔(batch)
+            # ---- 以下仅离线提取脚本使用 ----
+            "embed_batch_size": 256,
+            "sasrec_checkpoint": None,      # 默认 runs/<Category>_sasrec_bce1/best.pt
+            "bge_item_embeddings": None,    # 默认 runs/rqvae/<Category>/embeddings.npy
+        },
     },
     "evaluation": {
         "num_beams": 10,

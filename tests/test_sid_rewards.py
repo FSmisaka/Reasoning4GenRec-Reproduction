@@ -329,7 +329,11 @@ def test_truncate_after_think_for_beam():
     sys.modules["vllm.lora.request"].LoRARequest = object
     sys.modules["vllm.model_executor.sampling_metadata"].SamplingMetadata = object
     sys.modules["vllm.worker.worker_base"].WorkerWrapperBase = object
-    sys.modules["torch"].no_grad = lambda: (lambda f: f)
+    # 仅为让当前 fork 文件可导入: 临时替换 torch.no_grad(导入结束后恢复,
+    # 避免污染同进程后续测试, 如 tests/test_user_embed.py 的 SASRec 用例)
+    _torch_mod = sys.modules["torch"]
+    _orig_no_grad = getattr(_torch_mod, "no_grad", None)
+    _torch_mod.no_grad = lambda: (lambda f: f)
     sys.modules["verl.workers.rollout.base"].BaseRollout = object
     sys.modules["verl.utils.profiler"].GPUMemoryLogger = lambda **kw: (lambda f: f)
     sys.modules["verl.utils.torch_functional"].get_response_mask = None
@@ -338,9 +342,15 @@ def test_truncate_after_think_for_beam():
     spec = importlib.util.spec_from_file_location("vllm_rollout_spmd_test", rollout_file)
     module = importlib.util.module_from_spec(spec)
     try:
-        spec.loader.exec_module(module)
-    except Exception as e:  # pragma: no cover
-        pytest.skip(f"无法在当前环境导入 vllm_rollout_spmd: {e}")
+        try:
+            spec.loader.exec_module(module)
+        except Exception as e:  # pragma: no cover
+            pytest.skip(f"无法在当前环境导入 vllm_rollout_spmd: {e}")
+    finally:
+        if _orig_no_grad is not None:
+            _torch_mod.no_grad = _orig_no_grad
+        else:  # pragma: no cover - 真实 torch 未导入时删掉占位属性
+            delattr(_torch_mod, "no_grad")
 
     truncate = module.truncate_after_think_for_beam
     marker = [151668]  # Qwen3 的 </think>

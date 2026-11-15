@@ -210,6 +210,26 @@ $(eval $(call SIDREASONER_PY_TARGET,games,src.data.sidreasoner_rl_data,rl-data))
 $(eval $(call SIDREASONER_PY_TARGET,office,src.data.sidreasoner_rl_data,rl-data))
 $(eval $(call SIDREASONER_PY_TARGET,industrial,src.data.sidreasoner_rl_data,rl-data))
 
+# 跨 Query 多样性奖励的离线 User Embedding 提取(ENCODER= 可覆盖
+# config 的 user_encoder_type; 产物 runs/sidreasoner/user_embed/*.npz)
+define SIDREASONER_USER_EMBED_TARGET
+$(1)-sidreasoner-user-embed:
+	DATASET=$(1) bash scripts/sidreasoner/user_embed.sh
+endef
+$(eval $(call SIDREASONER_USER_EMBED_TARGET,games))
+$(eval $(call SIDREASONER_USER_EMBED_TARGET,office))
+$(eval $(call SIDREASONER_USER_EMBED_TARGET,industrial))
+
+# Stage 3 RL + 跨 Query CoT 多样性奖励(rl_bleu.sh = INTER_DIV=1 的 rl.sh;
+# 需先 make <dataset>-sidreasoner-user-embed)
+define SIDREASONER_TARGET_BLEU
+$(1)-sidreasoner-rl-bleu:
+	DATASET=$(1) CUDA_VISIBLE_DEVICES="$(SIDR_GPUS)" bash scripts/sidreasoner/rl_bleu.sh
+endef
+$(eval $(call SIDREASONER_TARGET_BLEU,games))
+$(eval $(call SIDREASONER_TARGET_BLEU,office))
+$(eval $(call SIDREASONER_TARGET_BLEU,industrial))
+
 # Stage 3 RL 训练曲线(需 .venv 内安装 matplotlib: .venv/bin/pip install matplotlib)
 define SIDREASONER_CURVES_TARGET
 $(1)-sidreasoner-curves:

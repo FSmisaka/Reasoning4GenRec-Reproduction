@@ -126,6 +126,71 @@ EOF
     ;;
 esac
 
+# ---- 跨 Query CoT 多样性奖励(DIVER 改造版): INTER_DIV=1 或 config ----
+# rl.inter_query_diversity.enable=true 时开启(推荐经
+# scripts/sidreasoner/rl_bleu.sh / make <dataset>-sidreasoner-rl-bleu)。
+# 开启后: reward 入口 -> src/reward/direct_recommendation_interdiv.py
+# (verl 自带 reward_manager=batch, 整个逻辑 batch 传入), 原 reward
+# (steprule / rollout_beam 族)逐行复用不变, 实验名加 _bleu 后缀。
+# 关闭时本分支零改动, Stage 3 与改造前完全一致。
+INTER_DIV=${INTER_DIV:-$(${PY} -c "from config import load_config; print('True' if load_config('sidreasoner')['rl'].get('inter_query_diversity', {}).get('enable', False) else 'False')")}
+case "${INTER_DIV}" in
+  1|[Tt]rue|[Yy]es|[Oo]n) INTER_DIV=True ;;
+  *) INTER_DIV=False ;;
+esac
+INTERDIV_FLAGS=""
+if [[ "${INTER_DIV}" == "True" ]]; then
+  read -r IQD_ENC IQD_PATH IQD_K IQD_JAC IQD_LI IQD_LF IQD_DS IQD_GAMMA \
+        IQD_SIGMA IQD_DIVLEN IQD_SEED IQD_METRICS \
+        < <(${PY} - <<'EOF'
+from config import load_config
+import os
+iqd = load_config("sidreasoner")["rl"].get("inter_query_diversity", {})
+cat = load_config("sidreasoner")["data"]["categories"][os.environ["DATASET"]]
+enc = iqd.get("user_encoder_type", "sasrec")
+path = iqd.get("user_embedding_path") or f"runs/sidreasoner/user_embed/{cat}_{enc}.npz"
+print(enc, path, iqd.get("top_k_neighbors", 8), iqd.get("same_user_jaccard", 0.8),
+      iqd.get("lambda_init", 0.2), iqd.get("lambda_final", 0.0),
+      iqd.get("decay_steps", 300), iqd.get("gamma", 1.0),
+      iqd.get("sigma", 0.5), iqd.get("bleu_div_len", 1000),
+      iqd.get("seed", 0), iqd.get("metrics_path") or "")
+EOF
+)
+  if [[ ! -f "${IQD_PATH}" ]]; then
+    echo "错误: 未找到 User Embedding 缓存 ${IQD_PATH}。" >&2
+    echo "      先运行: DATASET=${DATASET} make ${DATASET}-sidreasoner-user-embed" >&2
+    echo "      (或修改 config/sidreasoner.py 的 rl.inter_query_diversity.user_embedding_path)" >&2
+    exit 1
+  fi
+  # base reward 类型沿用上方 REWARD 分支的选择(steprule 默认)
+  case "${REWARD}" in
+    steprule)          BASE_REWARD_TYPE="steprule" ;;
+    rollout_beam)      BASE_REWARD_TYPE="onerec_rollout_beam" ;;
+    rollout_beam_div)  BASE_REWARD_TYPE="onereason_div_rollout_beam" ;;
+  esac
+  REWARD_PATH="$(pwd)/src/reward/direct_recommendation_interdiv.py"
+  # batch reward manager: 把 B(query) x G(rollout) 一次性传给 reward,
+  # in-batch 邻居检索在 driver 端全局 batch 上进行, 天然跨 DP rank 一致。
+  INTERDIV_FLAGS="reward_model.reward_manager=batch"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.enable_inter_query_diversity=true"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.base_reward_type=${BASE_REWARD_TYPE}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.user_embedding_path=$(pwd)/${IQD_PATH}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.top_k_neighbors=${IQD_K}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.same_user_jaccard=${IQD_JAC}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.lambda_init=${IQD_LI}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.lambda_final=${IQD_LF}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.decay_steps=${IQD_DS}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.gamma=${IQD_GAMMA}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.sigma=${IQD_SIGMA}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.bleu_div_len=${IQD_DIVLEN}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.seed=${IQD_SEED}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.model_path=$(pwd)/${STAGE2_CKPT}"
+  if [[ -n "${IQD_METRICS}" ]]; then
+    INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.metrics_path=$(pwd)/${IQD_METRICS}"
+  fi
+  REWARD_SUFFIX="${REWARD_SUFFIX}_bleu"
+fi
+
 EXPERIMENT_NAME="${CATEGORY}_stage3_rl_Qwen3-1.7B${SID_SUFFIX}${REWARD_SUFFIX}"
 
 export PYTHONPATH="${VERL_HOME}:${PYTHONPATH:-}"
@@ -168,6 +233,7 @@ ${PY} -m verl.trainer.main_ppo \
     custom_reward_function.path="${REWARD_PATH}" \
     custom_reward_function.name="rule_base_reward" \
     ${REWARD_FLAGS} \
+    ${INTERDIV_FLAGS} \
     trainer.project_name="${PROJECT}" \
     trainer.experiment_name="${EXPERIMENT_NAME}" \
     trainer.n_gpus_per_node=${N_GPUS} \

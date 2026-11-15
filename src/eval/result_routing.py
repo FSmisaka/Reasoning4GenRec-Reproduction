@@ -14,6 +14,7 @@ results/sidreasoner/ 下的产物统一组织为::
     think_steprule          原始 SIDReasoner(StepRule reward)思考模式
     think_rolloutbeam       Rollout-Beam reward(OneRec-Think)思考模式
     think_rolloutbeam_div   Rollout-Beam x OneReason R_div 思考模式
+    think_bleu              跨 Query CoT 多样性奖励(DIVER 改造版)思考模式
     think_steprule_temp     原始 SIDReasoner 思考模式 + 采样温度(temperature > 0)
 
     泛化规则(按需自动创建, 不在固定清单内):
@@ -77,8 +78,8 @@ def variant_of_model(model) -> str:
     -> "sft" / "sft_gem"(GEM 损失变体);
 
     Stage 3 RL(checkpoints/RecRL_Reasoning/
-    <C>_stage3_rl_Qwen3-1.7B[_own][_rolloutbeam[_div]])
-    -> "steprule" / "rolloutbeam" / "rolloutbeam_div"。
+    <C>_stage3_rl_Qwen3-1.7B[_own][_rolloutbeam[_div]|_bleu])
+    -> "steprule" / "rolloutbeam" / "rolloutbeam_div" / "bleu"。
     """
     path = str(model or "")
     if re.search(r"stage[12]_(sft|activation)", path):
@@ -87,6 +88,8 @@ def variant_of_model(model) -> str:
         return "rolloutbeam_div"
     if "_rolloutbeam" in path:
         return "rolloutbeam"
+    if "_bleu" in path:
+        return "bleu"
     return "steprule"
 
 
