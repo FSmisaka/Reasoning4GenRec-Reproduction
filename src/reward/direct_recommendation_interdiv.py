@@ -103,6 +103,8 @@ def _get_addon(kwargs: dict):
             reference_mode=str(kwargs.get("reference_mode", "full")),
             bleu_smoothing=str(kwargs.get("bleu_smoothing", "none")),
             td_norm=str(kwargs.get("td_norm", "none")),
+            similarity=str(kwargs.get("similarity", "bleu")),
+            ngram_n=int(kwargs.get("ngram_n", 1)),
         )
     return _ADDON
 

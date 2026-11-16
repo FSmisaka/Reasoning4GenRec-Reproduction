@@ -28,6 +28,10 @@ R'_{q,i} = R_{q,i} + λ(t) * I_{q,i} * clip( γ^{T_{q,i}} * d(o_{q,i}), 0, σ )
   子集;`K_q = |N_K^valid(q)|`,为 0 时 `d = 0`;
 - `c~_{q'}`:邻居 q' 的 G 条 rollout 中随机选一条成功 CoT 作 Reference
   (多个成功时随机,seed 可配);
+- `similarity`(配置)可选 `bleu`(默认, 下式)或 `ngram_jaccard`:
+  `sim(a,b) = |G_n(a)∩G_n(b)| / |G_n(a)∪G_n(b)|`(n-gram 集合 Jaccard,
+  `ngram_n` 控阶数), `TD = 1 - sim`。`make <ds>-sidreasoner-rl-ngram`
+  即后者, 产物后缀 `_ngram`。
 - `BLEU_sym(a,b) = (BLEU(ref=a,cand=b) + BLEU(ref=b,cand=a)) / 2`,
   口径与 DIVER 官方 `calculate_belu_matrix` 一致:
   whitespace 分词、截断前 1000 字符、5-gram 权重
@@ -56,6 +60,8 @@ intrinsic 零方差)。四个独立开关(默认均保持原行为):
 | `reference_mode` | `full`(默认)/`prefix`/`none` | 邻居 Reference 准入: 三级全匹配 / 首层 code 匹配 / 退回任一可解析 CoT(优先级 full > prefix > any; 旧值 `success`/`any` 兼容) |
 | `bleu_smoothing` | `none`(默认)/`method1` | DIVER 无平滑(自然语言 CoT 上 BLEU 常为 0, TD 饱和到 1)/ nltk add-1 平滑 |
 | `td_norm` | `none`(默认)/`rank` | 无 / 组内秩归一化: TD 按秩映射到 [0,1] 均布(仅 I=1 的 rollout 参与), 保证 GRPO 组内区分度由 λ·σ 直接控制; rank 模式建议 `sigma=1.0` |
+| `similarity` | `bleu`(默认)/`ngram_jaccard` | 多样性度量: SymBLEU / `1 - \|G_n(a)∩G_n(b)\| / \|G_n(a)∪G_n(b)\|`(n-gram 集合 Jaccard) |
+| `ngram_n` | 1 | ngram_jaccard 的 n 阶数 |
 
 在 32 query x 8 rollout 的真实 probe batch 上实测(Video_Games, Stage 2):
 
@@ -231,8 +237,12 @@ make games-sidreasoner-rl-bleu
 # 3) 与 Rollout-Beam 组合
 make games-sidreasoner-rl-bleu REWARD=rollout_beam_div
 
+# 3b) n-gram Jaccard 度量(产物自动加 _ngram 后缀)
+make games-sidreasoner-rl-ngram
+
 # 4) 合并 / 评估(结果路由到 Games/think_bleu/)
 make games-sidreasoner-merge RL_SUFFIX=_bleu
+make games-sidreasoner-merge RL_SUFFIX=_ngram
 make games-sidreasoner-think \
     MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_bleu/global_step_100/actor_merged
 

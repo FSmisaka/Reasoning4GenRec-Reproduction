@@ -208,26 +208,32 @@ CONFIG: Dict[str, Any] = {
             "lambda_final": 0.0,            # 最终权重(线性衰减)
             "decay_steps": 300,             # 权重衰减步数(train batch 数)
             "gamma": 1.0,                   # 折扣因子(默认 1.0 = 不折扣; <1 需 model_path tokenizer)
-            "sigma": 0.5,                   # intrinsic 裁剪上界
+            "sigma": 1,                   # intrinsic 裁剪上界
             "bleu_div_len": 1000,           # DIVER BLEU 参与比较的 CoT 前缀字符数
             "seed": 0,                      # reference CoT 随机选择的 RNG 种子
             # ---- 低成功率阶段的 reward 设计开关(默认 = DIVER 严格口径) ----
             # success_mode: 条件塑形指示 I 的口径。Stage 2 起点三级全匹配
             #   成功率 ~1%, "full" 会让 intrinsic 几乎恒 0; 可选:
             #   full(三级全匹配)| prefix(首层 code 匹配)| none(不做正确性约束)
-            "success_mode": "full",
+            "success_mode": "prefix",
             # reference_mode: 邻居 Reference 准入档位。full=邻居三级全匹配;
             #   prefix=邻居首层 code 匹配即可; none=退回任一可解析 CoT
             #   (优先级 full > prefix > any; 旧值 success/any 仍兼容)
-            "reference_mode": "full",
+            "reference_mode": "prefix",
             # bleu_smoothing: none(DIVER 官方无平滑, 自然语言 CoT 上 BLEU
             #   常为 0 -> TD 饱和到 1)| method1(nltk add-1 平滑, 有真实区分度)
-            "bleu_smoothing": "none",
+            "bleu_smoothing": "method1",
             # td_norm: none | rank。TD 的组内绝对差通常只有 ~0.01, 直接相加
             #   对 GRPO 组内排序几乎无影响; rank 把每组的 TD 按秩映射到
             #   [0,1] 均布(仅 I=1 的 rollout 参与), 组内区分度由 λ·σ 直接
             #   控制。rank 模式下建议 sigma=1.0(否则一半排序被裁剪)。
-            "td_norm": "none",
+            "td_norm": "rank",
+            # similarity: 多样性度量。bleu = SymBLEU(DIVER 官方口径, 受
+            #   bleu_smoothing 影响); ngram_jaccard = 1 - |G_n(a)∩G_n(b)| /
+            #   |G_n(a)∪G_n(b)|(n-gram 集合 Jaccard)。rl_ngram.sh /
+            #   INTER_DIV_METRIC=ngram 会强制覆盖为 ngram_jaccard。
+            "similarity": "bleu",
+            "ngram_n": 1,                   # ngram_jaccard 的 n 阶数
             "metrics_path": None,          # 默认 embedding 同目录 interdiv_metrics.jsonl
             "log_every": 1,                 # 摘要打印间隔(batch)
             # ---- 以下仅离线提取脚本使用 ----

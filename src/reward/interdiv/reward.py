@@ -30,6 +30,7 @@ from .bleu import DiverBleu
 from .cot_utils import extract_cot, recommendation_match
 from .neighbor import build_same_user_mask, topk_neighbors
 from .shaping import lambda_at, rank_normalize, shape_rewards
+from .similarity import NgramJaccard
 from .user_store import UserEmbeddingStore
 
 #: 参与比较的 CoT 最少 whitespace token 数(低于此值 td 记 0,
@@ -61,6 +62,8 @@ class InterQueryDiversityAddon:
         reference_mode: str = "success",
         bleu_smoothing: str = "none",
         td_norm: str = "none",
+        similarity: str = "bleu",
+        ngram_n: int = 1,
     ):
         """device 仅用于 BxB 邻居矩阵乘, 默认 cpu: reward 在 verl driver
         进程执行, 默认用 cuda 会在 colocated GPU 上建 context 挤占显存。
@@ -77,11 +80,25 @@ class InterQueryDiversityAddon:
             rollout)的 TD 按秩映射到 [0, 1] 均布后再塑形。TD 的组内
             绝对差通常极小(~0.01), 直接相加对 GRPO 组内排序几乎无影响;
             秩归一化保证组内区分度由 λ·σ 直接控制(均值固定, 无常数平移)。
+        similarity: 多样性度量。"bleu" = SymBLEU(DIVER 官方口径, 含
+            bleu_smoothing 选项); "ngram_jaccard" = 1 - n-gram 集合
+            Jaccard(|G_n(a)∩G_n(b)| / |G_n(a)∪G_n(b)|)。
+        ngram_n: ngram_jaccard 的 n(默认 1)。
         """
         self.store = UserEmbeddingStore(user_embedding_path)
         self.top_k = int(top_k_neighbors)
         self.same_user_jaccard = float(same_user_jaccard)
-        self.bleu = DiverBleu(div_len=int(bleu_div_len), smoothing=bleu_smoothing)
+        self.similarity = str(similarity)
+        if self.similarity == "bleu":
+            self.scorer = DiverBleu(
+                div_len=int(bleu_div_len), smoothing=bleu_smoothing
+            )
+        elif self.similarity == "ngram_jaccard":
+            self.scorer = NgramJaccard(n=int(ngram_n), div_len=int(bleu_div_len))
+        else:
+            raise ValueError(
+                f"未知 similarity: {similarity!r}(bleu | ngram_jaccard)"
+            )
         self.success_mode = str(success_mode)
         if self.success_mode not in ("full", "prefix", "none"):
             raise ValueError(
@@ -286,7 +303,7 @@ class InterQueryDiversityAddon:
                     continue
                 d = float(
                     np.mean(
-                        [self.bleu.diversity(cot, ref) for ref in valid_refs]
+                        [self.scorer.diversity(cot, ref) for ref in valid_refs]
                     )
                 )
                 td_values[r] = d
@@ -369,7 +386,9 @@ class InterQueryDiversityAddon:
             "n_rollouts": m["n_rollouts"],
             "success_mode": self.success_mode,
             "reference_mode": self.reference_mode,
-            "bleu_smoothing": self.bleu.smoothing,
+            "similarity": self.similarity,
+            "bleu_smoothing": getattr(self.scorer, "smoothing", None),
+            "ngram_n": getattr(self.scorer, "n", None),
             "td_norm": self.td_norm,
             "base_reward_mean": float(np.mean(m["base_rewards"])),
             "augmented_reward_mean": float(np.mean(m["augmented"])),

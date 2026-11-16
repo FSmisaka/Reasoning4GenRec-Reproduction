@@ -142,6 +142,7 @@ INTERDIV_FLAGS=""
 if [[ "${INTER_DIV}" == "True" ]]; then
   read -r IQD_ENC IQD_PATH IQD_K IQD_JAC IQD_LI IQD_LF IQD_DS IQD_GAMMA \
         IQD_SIGMA IQD_DIVLEN IQD_SEED IQD_METRICS IQD_SUCCESS IQD_REF IQD_SMOOTH IQD_TDNORM \
+        IQD_SIM IQD_NGRAM_N \
         < <(${PY} - <<'EOF'
 from config import load_config
 import os
@@ -155,11 +156,24 @@ print(enc, path, iqd.get("top_k_neighbors", 8), iqd.get("same_user_jaccard", 0.8
       iqd.get("sigma", 0.5), iqd.get("bleu_div_len", 1000),
       iqd.get("seed", 0), iqd.get("metrics_path") or "-",
       iqd.get("success_mode", "full"), iqd.get("reference_mode", "success"),
-      iqd.get("bleu_smoothing", "none"), iqd.get("td_norm", "none"))
+      iqd.get("bleu_smoothing", "none"), iqd.get("td_norm", "none"),
+      iqd.get("similarity", "bleu"), iqd.get("ngram_n", 1))
 EOF
 )
   # metrics_path 用 "-" 占位避免空字段导致 read 变量错位
   [[ "${IQD_METRICS}" == "-" ]] && IQD_METRICS=""
+  # 多样性度量: INTER_DIV_METRIC(bleu|ngram) 覆盖 config 的 similarity
+  case "${INTER_DIV_METRIC:-}" in
+    "")                      ;;
+    bleu)                    IQD_SIM="bleu" ;;
+    ngram|ngram_jaccard)     IQD_SIM="ngram_jaccard" ;;
+    *) echo "错误: 未知 INTER_DIV_METRIC='${INTER_DIV_METRIC}' (可选 bleu | ngram)" >&2; exit 1 ;;
+  esac
+  case "${IQD_SIM}" in
+    bleu)          IQD_METRIC_SUFFIX="bleu" ;;
+    ngram_jaccard) IQD_METRIC_SUFFIX="ngram" ;;
+    *) echo "错误: 未知 similarity='${IQD_SIM}' (可选 bleu | ngram_jaccard)" >&2; exit 1 ;;
+  esac
   if [[ ! -f "${IQD_PATH}" ]]; then
     echo "错误: 未找到 User Embedding 缓存 ${IQD_PATH}。" >&2
     echo "      先运行: DATASET=${DATASET} make ${DATASET}-sidreasoner-user-embed" >&2
@@ -192,14 +206,22 @@ EOF
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.reference_mode=${IQD_REF}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.bleu_smoothing=${IQD_SMOOTH}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.td_norm=${IQD_TDNORM}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.similarity=${IQD_SIM}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.ngram_n=${IQD_NGRAM_N}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.model_path=$(pwd)/${STAGE2_CKPT}"
   if [[ -n "${IQD_METRICS}" ]]; then
     INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.metrics_path=$(pwd)/${IQD_METRICS}"
   fi
-  REWARD_SUFFIX="${REWARD_SUFFIX}_bleu"
+  REWARD_SUFFIX="${REWARD_SUFFIX}_${IQD_METRIC_SUFFIX}"
 fi
 
 EXPERIMENT_NAME="${CATEGORY}_stage3_rl_Qwen3-1.7B${SID_SUFFIX}${REWARD_SUFFIX}"
+
+# 跨 Query 多样性奖励的指标日志: 未显式配置时按实验名隔离, 避免
+# bleu/ngram 等变体混写同一个 interdiv_metrics.jsonl
+if [[ "${INTER_DIV}" == "True" && -z "${IQD_METRICS:-}" ]]; then
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.metrics_path=$(pwd)/logs/${EXPERIMENT_NAME}_interdiv_metrics.jsonl"
+fi
 
 export PYTHONPATH="${VERL_HOME}:${PYTHONPATH:-}"
 # 注意: 不要在这里设置 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True!

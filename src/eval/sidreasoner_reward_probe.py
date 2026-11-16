@@ -389,6 +389,8 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             "reference_mode": iqd.get("reference_mode", "full"),
             "bleu_smoothing": iqd.get("bleu_smoothing", "none"),
             "td_norm": iqd.get("td_norm", "none"),
+            "similarity": iqd.get("similarity", "bleu"),
+            "ngram_n": iqd.get("ngram_n", 1),
             # 探针的 interdiv 日志独立落盘, 不污染训练的 interdiv_metrics.jsonl
             "metrics_path": os.path.join(out_dir, "interdiv_probe_metrics.jsonl"),
         }
@@ -447,7 +449,7 @@ def main(argv=None, cfg=None):
     parser.add_argument("--model", default=None, help="策略 checkpoint(默认 Stage 2 / MODEL=)")
     parser.add_argument("--split", default="train", help="parquet split(默认 train)")
     parser.add_argument("--n-queries", type=int, default=32, help="batch 内 query 数 B")
-    parser.add_argument("--rollout-n", type=int, default=8, help="每 query 采样条数 G")
+    parser.add_argument("--rollout-n", type=int, default=16, help="每 query 采样条数 G")
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--max-tokens", type=int, default=1024)

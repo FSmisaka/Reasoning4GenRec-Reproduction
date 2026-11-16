@@ -230,6 +230,15 @@ $(eval $(call SIDREASONER_TARGET_BLEU,games))
 $(eval $(call SIDREASONER_TARGET_BLEU,office))
 $(eval $(call SIDREASONER_TARGET_BLEU,industrial))
 
+# Stage 3 RL + 跨 Query CoT 多样性(n-gram Jaccard 版; 前置同 rl-bleu)
+define SIDREASONER_TARGET_NGRAM
+$(1)-sidreasoner-rl-ngram:
+	DATASET=$(1) CUDA_VISIBLE_DEVICES="$(SIDR_GPUS)" bash scripts/sidreasoner/rl_ngram.sh
+endef
+$(eval $(call SIDREASONER_TARGET_NGRAM,games))
+$(eval $(call SIDREASONER_TARGET_NGRAM,office))
+$(eval $(call SIDREASONER_TARGET_NGRAM,industrial))
+
 # Stage 3 RL 训练曲线(需 .venv 内安装 matplotlib: .venv/bin/pip install matplotlib)
 define SIDREASONER_CURVES_TARGET
 $(1)-sidreasoner-curves:

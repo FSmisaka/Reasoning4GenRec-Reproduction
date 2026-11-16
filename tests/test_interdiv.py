@@ -20,6 +20,7 @@ R4GR_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(R4GR_ROOT))
 
 from src.reward.interdiv.bleu import DiverBleu  # noqa: E402
+from src.reward.interdiv.similarity import NgramJaccard  # noqa: E402
 from src.reward.interdiv.cot_utils import extract_cot, is_recommendation_success  # noqa: E402
 from src.reward.interdiv.neighbor import build_same_user_mask, topk_neighbors  # noqa: E402
 from src.reward.interdiv.shaping import lambda_at, rank_normalize, shape_rewards  # noqa: E402
@@ -123,6 +124,49 @@ def test_bleu_matches_nltk_if_available():
         expected = sentence_bleu([ref], cand, weights=DiverBleu().weights)
         got = b.bleu(a, c)
         assert got == pytest.approx(float(expected), abs=1e-9), (a, c)
+
+
+# --------------------------------------------------------------------------- #
+# n-gram 集合 Jaccard(相似度替代度量)
+# --------------------------------------------------------------------------- #
+
+
+def test_ngram_jaccard_identical_disjoint_partial():
+    m = NgramJaccard(n=1)
+    text = "user likes action games and buys controllers often"
+    assert m.similarity(text, text) == pytest.approx(1.0)
+    assert m.diversity(text, text) == pytest.approx(0.0)
+    a = "alpha beta gamma delta epsilon zeta"
+    c = "one two three four five six"
+    assert m.similarity(a, c) == 0.0 and m.diversity(a, c) == 1.0
+    b = "the user likes racing games and buys headsets often"
+    sim = m.similarity(text, b)
+    assert 0.0 < sim < 1.0
+    # 对称性
+    assert sim == pytest.approx(m.similarity(b, text))
+
+
+def test_ngram_jaccard_set_semantics_and_order():
+    m1 = NgramJaccard(n=1)
+    # 集合语义: 重复 token 只计一次
+    assert m1.similarity("a a a b", "a b") == pytest.approx(1.0)
+    # 不同阶数结果不同
+    m2 = NgramJaccard(n=2)
+    a = "the user likes action games"
+    c = "the user likes racing games"
+    assert m1.similarity(a, c) != pytest.approx(m2.similarity(a, c))
+    with pytest.raises(ValueError):
+        NgramJaccard(n=0)
+
+
+def test_ngram_jaccard_matches_manual_formula():
+    m = NgramJaccard(n=2)
+    a = "x y z x y"
+    c = "y z q x y"
+    ga = {("x", "y"), ("y", "z"), ("z", "x")}
+    gc = {("y", "z"), ("z", "q"), ("q", "x"), ("x", "y")}
+    expect = len(ga & gc) / len(ga | gc)
+    assert m.similarity(a, c) == pytest.approx(expect)
 
 
 # --------------------------------------------------------------------------- #
@@ -694,6 +738,36 @@ def test_reference_mode_legacy_aliases(addon):
     base = dict(user_embedding_path=path, metrics_path=ad.metrics_path + ".alias")
     assert InterQueryDiversityAddon(**base, reference_mode="success").reference_mode == "full"
     assert InterQueryDiversityAddon(**base, reference_mode="any").reference_mode == "none"
+
+
+def test_addon_similarity_ngram_jaccard(addon):
+    """similarity=ngram_jaccard: TD = 1 - Jaccard; 与参考完全一致 -> 0。"""
+    ad, n_q, g = addon(n_queries=2, rollout_n=4, top_k_neighbors=1,
+                       success_mode="none", reference_mode="none",
+                       similarity="ngram_jaccard", ngram_n=2,
+                       lambda_init=1.0, sigma=1.0)
+    same = "a user prefers racing wheels and steering controllers for consoles"
+    diff = "puzzle quests with mythical creatures and hidden treasure maps"
+    rows = _make_batch([("train", 0, "cur"), ("train", 1, "nbr")], rollout_n=4)
+    for r in rows[4:]:
+        r["solution_str"] = _resp(same, GT)
+    # query0 的 4 条: 第 0 条与参考一致, 其余不同
+    for j, t in enumerate([same, diff, diff + " extra",
+                        "yet another completely different sentence about retro platformers"]):
+        rows[j]["solution_str"] = _resp(t, GT)
+    out = ad.compute_batch(rows, [0.0] * len(rows))
+    assert out[0]["td"] == pytest.approx(0.0)          # 与参考一致 -> Jaccard=1
+    assert all(0.0 < r["td"] <= 1.0 for r in out[1:4])
+
+
+def test_addon_rejects_unknown_similarity(addon):
+    ad, _, _ = addon(n_queries=2, rollout_n=2)
+    with pytest.raises(ValueError):
+        InterQueryDiversityAddon(
+            user_embedding_path=ad.store.path,
+            metrics_path=ad.metrics_path + ".sim",
+            similarity="bogus",
+        )
 
 
 # --------------------------------------------------------------------------- #

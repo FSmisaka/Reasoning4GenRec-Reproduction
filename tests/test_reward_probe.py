@@ -146,6 +146,8 @@ def test_preset_kwargs_bleu_and_steprule(tmp_path, monkeypatch):
     assert entry.endswith("direct_recommendation_interdiv.py") and not per_row
     assert kwargs["enable_inter_query_diversity"] is True
     assert kwargs["base_reward_type"] == "steprule"
+    assert kwargs["similarity"] in ("bleu", "ngram_jaccard")
+    assert int(kwargs["ngram_n"]) >= 1
     # 探针日志不得写进训练的 interdiv_metrics.jsonl
     assert kwargs["metrics_path"].startswith(str(tmp_path))
 

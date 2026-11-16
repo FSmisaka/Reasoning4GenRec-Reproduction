@@ -47,6 +47,8 @@ def test_variant_of_model():
     assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_own_rolloutbeam_div/global_step_100/actor_merged") == "rolloutbeam_div"
     assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_bleu/global_step_100/actor_merged") == "bleu"
     assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_own_bleu/global_step_100/actor_merged") == "bleu"
+    assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_ngram/global_step_100/actor_merged") == "ngram"
+    assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_own_ngram/global_step_100/actor_merged") == "ngram"
 
 
 def test_variant_of_model_sft():

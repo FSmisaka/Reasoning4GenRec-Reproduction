@@ -54,7 +54,8 @@ make games-sidreasoner-rl              # Stage 3: GRPO 强化学习(前置见下
 make games-sidreasoner-rl-beam         # Stage 3 变体: OneRec-Think Rollout-Beam reward(见下)
 make games-sidreasoner-rl-beam-div     # Stage 3 变体: Rollout-Beam x OneReason R_div(见下)
 make games-sidreasoner-user-embed      # 跨 Query 多样性奖励的离线 User Embedding(一次性)
-make games-sidreasoner-rl-bleu         # Stage 3 变体: 跨 Query CoT 多样性奖励(DIVER 改造版, 见下)
+make games-sidreasoner-rl-bleu         # Stage 3 变体: 跨 Query CoT 多样性(BLEU 度量, 见下)
+make games-sidreasoner-rl-ngram        # Stage 3 变体: 同上, 多样性度量换成 n-gram Jaccard
 
 # 挂 tmux 跑:
 make tmux TARGET=games-sidreasoner-sft SESSION=sft-games
@@ -74,6 +75,7 @@ make games-sidreasoner-merge
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_div
 make games-sidreasoner-merge RL_SUFFIX=_bleu
+make games-sidreasoner-merge RL_SUFFIX=_ngram
 
 # 4) 思考模式评估 & 计算指标 & 画图
 make games-sidreasoner-think \
@@ -163,8 +165,8 @@ make games-sidreasoner-think MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage
   等三条 grep 有输出即就绪, 普通 Stage 3 不受影响。
 - beam 参数: `rl.sid_beam_size`(K, >1)/ `sid_length`(L); beam-div 另有
   `reward_kwargs.div_level`(默认 1 = 首层); beam 集中导致 R_div 全零时增大 K。
-- bleu 变体参数: `rl.inter_query_diversity`(K 邻居/lambda 衰减/gamma/sigma/
-  BLEU 截断等), 设计与实现详见 `docs/sidreasoner_inter_query_diversity.md`;
+- bleu/ngram 变体参数: `rl.inter_query_diversity`(K 邻居/lambda 衰减/gamma/
+  sigma/度量与门控开关等), 详见 `docs/sidreasoner_inter_query_diversity.md`;
   默认关闭, 不影响其他 target。
 - 自定义奖励: 继承 `BaseSidReward` 注册到 `src/reward/sid_rewards/`(见
   `tests/test_sid_rewards.py`), `reward_kwargs.reward_type` 显式指定即可,

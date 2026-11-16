@@ -11,6 +11,12 @@
 
 from .bleu import DiverBleu  # noqa: F401
 from .reward import InterQueryDiversityAddon  # noqa: F401
+from .similarity import NgramJaccard  # noqa: F401
 from .user_store import UserEmbeddingStore  # noqa: F401
 
-__all__ = ["DiverBleu", "InterQueryDiversityAddon", "UserEmbeddingStore"]
+__all__ = [
+    "DiverBleu",
+    "InterQueryDiversityAddon",
+    "NgramJaccard",
+    "UserEmbeddingStore",
+]
