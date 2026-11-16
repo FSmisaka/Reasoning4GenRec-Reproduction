@@ -247,3 +247,24 @@ config 里直接 `enable: True`);无需改任何脚本。
 - 邻居多样性依赖 batch 组成(B=256 时每个 query 的可用邻居充足);
 - gamma<1 时需要 `model_path` tokenizer(已在启用分支自动传入 Stage-2
   checkpoint 路径)。
+
+---
+
+## 7. 组内区分度探针(reward 通用验证工具)
+
+`src/eval/sidreasoner_reward_probe.py`: 采样一个 batch(B query x G rollout,
+vLLM 温度采样, 默认策略 = Stage 2 checkpoint), 调用任意 reward 入口, 逐组
+报告每条 rollout 的 score / base_reward / success / td / intrinsic 与组内
+std、零方差组占比、组内 CoT 成对 BLEU 相似度(CoT 坍缩诊断)。
+
+```bash
+make games-sidreasoner-reward-probe                      # 默认 --reward bleu
+make games-sidreasoner-reward-probe ARGS="--reward steprule"
+make games-sidreasoner-reward-probe ARGS="--batch-json <旧探针输出>"   # 复用 batch 换 reward 重测
+make games-sidreasoner-reward-probe ARGS="--reward custom --reward-entry <入口.py> --reward-kwargs k=v"  # 新 reward
+```
+
+输出 `results/reward_probe/<Category>_stage3_rl_<label>_probe.json`(命名对齐
+Stage 3 实验名后缀), 内含 `batch.rows` 可直接被 `--batch-json` 复用。
+局限: 依赖 rollout 侧 beam search 的 reward(rollout_beam 族)无法用本工具
+生成, 需提供带 `beam_search_results` 的 batch。

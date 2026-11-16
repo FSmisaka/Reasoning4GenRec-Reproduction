@@ -151,6 +151,8 @@ make games-sidreasoner-rl-beam         # Rollout-Beam: CoT 后 beam K 个候选�
 make games-sidreasoner-rl-beam-div     # 再乘 OneReason R_div(候选首层 code 去重度)
 make games-sidreasoner-user-embed      # (bleu 前置)SASRec 用户向量离线缓存 -> runs/sidreasoner/user_embed/
 make games-sidreasoner-rl-bleu         # 跨 Query CoT 多样性: R + lambda*I*clip(gamma^T*TD, 0, sigma)
+make games-sidreasoner-reward-probe    # reward 组内区分度探针: 采样一个 batch, 逐组报告 reward 分解
+                                       # ARGS="--n-queries 32 --rollout-n 8 --reward bleu|steprule|custom ..."
 
 # 评估(目录名对应 think_rolloutbeam / think_rolloutbeam_div / think_bleu)
 make games-sidreasoner-think MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam/global_step_100/actor_merged

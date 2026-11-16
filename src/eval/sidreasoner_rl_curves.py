@@ -68,11 +68,11 @@ DEFAULT_SERIES = [
      "subdir": "think_rolloutbeam", "color": C_BLUE, "ls": "-", "marker": "o"},
     {"label": "Rollout-Beam x R_div (OneReason)",
      "subdir": "think_rolloutbeam_div", "color": C_RED, "ls": "--", "marker": "s"},
-    {"label": "StepRule (原始 SIDReasoner)",
+    {"label": "StepRule (SIDReasoner)",
      "subdir": "think_steprule", "color": C_GRAY, "ls": "-.", "marker": "^"},
-    {"label": "Rollout-Beam (温度采样)",
+    {"label": "Rollout-Beam (temp)",
      "subdir": "think_rolloutbeam_temp", "color": C_BLUE, "ls": ":", "marker": "v"},
-    {"label": "StepRule (温度采样)",
+    {"label": "StepRule (temp)",
      "subdir": "think_steprule_temp", "color": C_GRAY, "ls": ":", "marker": "D"},
 ]
 

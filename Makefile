@@ -240,6 +240,16 @@ $(eval $(call SIDREASONER_CURVES_TARGET,games))
 $(eval $(call SIDREASONER_CURVES_TARGET,office))
 $(eval $(call SIDREASONER_CURVES_TARGET,industrial))
 
+# Stage 3 reward 组内区分度探针(vLLM 采样一个 batch, 逐组分解 reward;
+# ARGS 传参如 ARGS="--n-queries 32 --rollout-n 8 --reward bleu", MODEL= 覆盖策略)
+define SIDREASONER_REWARD_PROBE_TARGET
+$(1)-sidreasoner-reward-probe:
+	DATASET=$(1) $(PY) -m src.eval.sidreasoner_reward_probe $$$${ARGS:--}
+endef
+$(eval $(call SIDREASONER_REWARD_PROBE_TARGET,games))
+$(eval $(call SIDREASONER_REWARD_PROBE_TARGET,office))
+$(eval $(call SIDREASONER_REWARD_PROBE_TARGET,industrial))
+
 $(eval $(call SIDREASONER_METRICS_TARGET,games,Video_Games,Games))
 $(eval $(call SIDREASONER_METRICS_TARGET,office,Office_Products,Office))
 $(eval $(call SIDREASONER_METRICS_TARGET,industrial,Industrial_and_Scientific,Industrial))
