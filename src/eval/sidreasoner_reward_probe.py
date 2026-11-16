@@ -5,7 +5,8 @@
 回答"组内分数是否全相同、reward 有无区分度"。
 
 复用方式(对后续任何新 reward 通用):
-1. preset: --reward bleu(默认, 跨 Query 多样性)/ steprule(论文原版);
+1. preset: --reward bleu(默认, 跨 Query 多样性)/ ngram(同上的 n-gram
+   Jaccard 度量, 与 rl_ngram.sh 一致)/ steprule(论文原版);
 2. custom: --reward custom --reward-entry <入口.py> --reward-name <函数名>
    [--reward-kwargs k=v ...] [--per-row](逐行 naive API);
 3. --batch-json <旧探针输出>: 复用上次生成的 batch, 只换 reward 重跑,
@@ -369,7 +370,7 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
     """返回 (entry_path, fn_name, kwargs, per_row)。"""
     iqd = cfg["rl"].get("inter_query_diversity", {}) or {}
     category = resolve_category(cfg["data"])
-    if preset == "bleu":
+    if preset in ("bleu", "ngram"):
         enc = iqd.get("user_encoder_type", "sasrec")
         emb = iqd.get("user_embedding_path") or os.path.join(
             "runs", "sidreasoner", "user_embed", f"{category}_{enc}.npz"
@@ -389,7 +390,12 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             "reference_mode": iqd.get("reference_mode", "full"),
             "bleu_smoothing": iqd.get("bleu_smoothing", "none"),
             "td_norm": iqd.get("td_norm", "none"),
-            "similarity": iqd.get("similarity", "bleu"),
+            # ngram preset 强制 ngram_jaccard(与 rl_ngram.sh 一致);
+            # bleu preset 按 config(与 rl-bleu 一致, 便于跟随训练配置)
+            "similarity": (
+                "ngram_jaccard" if preset == "ngram"
+                else iqd.get("similarity", "bleu")
+            ),
             "ngram_n": iqd.get("ngram_n", 1),
             # 探针的 interdiv 日志独立落盘, 不污染训练的 interdiv_metrics.jsonl
             "metrics_path": os.path.join(out_dir, "interdiv_probe_metrics.jsonl"),
@@ -407,7 +413,9 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             {},
             True,
         )
-    raise ValueError(f"未知 preset '{preset}'(bleu | steprule; 自定义用 --reward custom)")
+    raise ValueError(
+        f"未知 preset '{preset}'(bleu | ngram | steprule; 自定义用 --reward custom)"
+    )
 
 
 def parse_kv(pairs: list) -> dict:
@@ -437,7 +445,9 @@ def parse_kv(pairs: list) -> dict:
 
 def main(argv=None, cfg=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reward", default="bleu", help="preset: bleu | steprule | custom")
+    parser.add_argument(
+        "--reward", default="bleu", help="preset: bleu | ngram | steprule | custom"
+    )
     parser.add_argument("--reward-entry", default=None, help="custom: reward 入口 .py 路径")
     parser.add_argument("--reward-name", default="rule_base_reward", help="custom: 入口函数名")
     parser.add_argument(

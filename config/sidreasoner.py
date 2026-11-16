@@ -233,7 +233,7 @@ CONFIG: Dict[str, Any] = {
             #   |G_n(a)∪G_n(b)|(n-gram 集合 Jaccard)。rl_ngram.sh /
             #   INTER_DIV_METRIC=ngram 会强制覆盖为 ngram_jaccard。
             "similarity": "bleu",
-            "ngram_n": 1,                   # ngram_jaccard 的 n 阶数
+            "ngram_n": 2,                   # ngram_jaccard 的 n 阶数
             "metrics_path": None,          # 默认 embedding 同目录 interdiv_metrics.jsonl
             "log_every": 1,                 # 摘要打印间隔(batch)
             # ---- 以下仅离线提取脚本使用 ----

@@ -301,6 +301,7 @@ std、零方差组占比、组内 CoT 成对 BLEU 相似度(CoT 坍缩诊断)。
 
 ```bash
 make games-sidreasoner-reward-probe                      # 默认 --reward bleu
+make games-sidreasoner-reward-probe ARGS="--reward ngram"   # n-gram Jaccard 度量
 make games-sidreasoner-reward-probe ARGS="--reward steprule"
 make games-sidreasoner-reward-probe ARGS="--batch-json <旧探针输出>"   # 复用 batch 换 reward 重测
 make games-sidreasoner-reward-probe ARGS="--reward custom --reward-entry <入口.py> --reward-kwargs k=v"  # 新 reward

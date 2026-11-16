@@ -154,6 +154,12 @@ def test_preset_kwargs_bleu_and_steprule(tmp_path, monkeypatch):
     entry2, name2, kwargs2, per_row2 = preset_kwargs(cfg, "steprule", str(tmp_path))
     assert entry2.endswith("direct_recommendation_steprule.py") and per_row2
 
+    # ngram preset: 强制 ngram_jaccard(与 rl_ngram.sh 一致), 其余参数同 bleu
+    entry3, name3, kwargs3, per_row3 = preset_kwargs(cfg, "ngram", str(tmp_path))
+    assert entry3.endswith("direct_recommendation_interdiv.py") and not per_row3
+    assert kwargs3["similarity"] == "ngram_jaccard"
+    assert kwargs3["ngram_n"] == kwargs["ngram_n"]
+
     with pytest.raises(ValueError):
         preset_kwargs(cfg, "nope", str(tmp_path))
 
