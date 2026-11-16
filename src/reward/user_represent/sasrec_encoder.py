@@ -29,16 +29,19 @@ class SASRecHiddenStateEncoder(BaseUserEncoder):
     """u_q = SASRec(H_q) 最后一个有效位置的 hidden state。
 
     Args:
-        checkpoint: runs/<Category>_sasrec_*/best.pt 路径。checkpoint 内
-            含 ``state_dict`` / ``config`` / ``n_items``; 模型超参优先从
-            state_dict 形状反推(hidden/max_seq_len/n_items), 与训练配置
-            无关地稳健重建。
+        checkpoint: runs/<Category>_sasrec_<loss>/best.pt 路径。模型超参
+            (hidden/n_layers/d_inner/max_seq_len/n_items)全部从权重形状
+            反推, 兼容任何训练配置与未保存 config 的裸 state_dict。
         device: "cuda" | "mps" | "cpu" | None(自动)。
+        n_heads: 注意力头数(权重无法推断)。缺省取 checkpoint 保存的
+            config, 再退回 SASRec 类签名默认。
     """
 
     name = "sasrec"
 
-    def __init__(self, checkpoint: str, device: str = None):
+    def __init__(self, checkpoint: str, device: str = None, n_heads: int = None):
+        import inspect
+
         from src.models.sasrec import SASRec
 
         ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
@@ -46,18 +49,26 @@ class SASRecHiddenStateEncoder(BaseUserEncoder):
         if "item_embedding.weight" not in state_dict:
             raise ValueError(f"{checkpoint} 中没有 item_embedding.weight, 不是 SASRec checkpoint。")
 
-        # 模型超参: 优先 shape/键名反推(与训练配置解耦), config 补充无法
-        # 从权重推断的项(n_heads / d_inner / dropout 等, 推理仅 n_heads 生效)
+        # 模型超参全部从权重形状反推(与训练时的 config 完全解耦, 兼容
+        # 未保存 config 的老 checkpoint):
+        #   n_items/hidden <- item_embedding; max_seq_len <- position_embedding;
+        #   n_layers <- layers.* 键名; d_inner <- ffn.dense_1
         n_items = int(state_dict["item_embedding.weight"].shape[0]) - 1
         hidden = int(state_dict["item_embedding.weight"].shape[1])
         max_seq_len = int(state_dict["position_embedding.weight"].shape[0])
-        n_layers = 1 + max(
-            int(k.split(".")[1]) for k in state_dict if k.startswith("layers.")
-        )
-        model_cfg = {}
-        if isinstance(ckpt, dict) and isinstance(ckpt.get("config"), dict):
-            model_cfg = ckpt["config"].get("model", {}) or {}
-        n_heads = int(model_cfg.get("n_heads", 1))
+        layer_ids = [int(k.split(".")[1]) for k in state_dict if k.startswith("layers.")]
+        n_layers = 1 + max(layer_ids) if layer_ids else 1
+        d_inner = int(state_dict["layers.0.ffn.dense_1.weight"].shape[0])
+        # n_heads 无法从权重推断(q/k/v 为 fused hidden x hidden): 优先显式参数
+        # -> checkpoint 保存的 config -> 模型类签名默认值
+        if n_heads is None:
+            model_cfg = {}
+            if isinstance(ckpt, dict) and isinstance(ckpt.get("config"), dict):
+                model_cfg = ckpt["config"].get("model", {}) or {}
+            n_heads = model_cfg.get("n_heads") or inspect.signature(
+                SASRec.__init__
+            ).parameters["n_heads"].default
+        n_heads = int(n_heads)
         self._n_items = n_items
         self._max_seq_len = max_seq_len
 
@@ -67,7 +78,7 @@ class SASRecHiddenStateEncoder(BaseUserEncoder):
             hidden=hidden,
             n_layers=n_layers,
             n_heads=n_heads,
-            d_inner=int(model_cfg.get("d_inner", 4 * hidden)),
+            d_inner=d_inner,
             dropout=0.0,
         )
         # 训练保存的是完整 state_dict(含 item_embedding/padding), 直接加载
@@ -80,6 +91,11 @@ class SASRecHiddenStateEncoder(BaseUserEncoder):
         self.model = model.to(device).eval()
         for p in self.model.parameters():
             p.requires_grad_(False)
+        print(
+            f"[sasrec-encoder] {checkpoint}: hidden={hidden} layers={n_layers} "
+            f"heads={n_heads} d_inner={d_inner} max_len={max_seq_len} "
+            f"n_items={n_items}"
+        )
 
     @property
     def dim(self) -> int:

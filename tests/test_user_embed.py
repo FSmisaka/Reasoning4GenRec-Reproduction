@@ -23,6 +23,7 @@ from src.data.sidreasoner_user_embed import (  # noqa: E402
     extract,
     parse_history_sids_from_prompt,
     _join_user_ids,
+    default_sasrec_checkpoint,
 )
 
 GAMES_ROOT = R4GR_ROOT / "data" / "raw" / "Amazon"
@@ -111,6 +112,52 @@ def test_history_sids_to_items_mapping():
 
 
 # --------------------------------------------------------------------------- #
+# SASRec checkpoint 自动定位
+# --------------------------------------------------------------------------- #
+
+
+def _touch(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").close()
+
+
+def test_default_sasrec_checkpoint_single_candidate(tmp_path):
+    # 只有 bce(用户的场景) -> 自动选用
+    only_bce = tmp_path / "runs" / "Video_Games_sasrec_bce" / "best.pt"
+    _touch(str(only_bce))
+    assert default_sasrec_checkpoint("Video_Games", str(tmp_path / "runs")) == str(only_bce)
+
+
+def test_default_sasrec_checkpoint_ignores_non_loss_dirs(tmp_path):
+    # MiniOneRec 等借用 sasrec 前缀的目录不应参与候选
+    _touch(str(tmp_path / "runs" / "Video_Games_sasrec_bce" / "best.pt"))
+    _touch(str(tmp_path / "runs" / "Video_Games_sasrec_minionerec" / "best.pt"))
+    _touch(str(tmp_path / "runs" / "Video_Games_sasrec_mini" / "best.pt"))
+    got = default_sasrec_checkpoint("Video_Games", str(tmp_path / "runs"))
+    assert got.endswith("Video_Games_sasrec_bce/best.pt")
+
+
+def test_default_sasrec_checkpoint_prefers_config_loss(tmp_path):
+    # 同时有 bce/bce1 -> 优先 config/sasrec.py 默认 loss 的命名
+    _touch(str(tmp_path / "runs" / "Video_Games_sasrec_bce" / "best.pt"))
+    bce1 = tmp_path / "runs" / "Video_Games_sasrec_bce1" / "best.pt"
+    _touch(str(bce1))
+    assert default_sasrec_checkpoint("Video_Games", str(tmp_path / "runs")) == str(bce1)
+
+
+def test_default_sasrec_checkpoint_ambiguous_raises(tmp_path):
+    _touch(str(tmp_path / "runs" / "Video_Games_sasrec_bce" / "best.pt"))
+    _touch(str(tmp_path / "runs" / "Video_Games_sasrec_ce" / "best.pt"))
+    with pytest.raises(FileNotFoundError, match="多个 SASRec checkpoint"):
+        default_sasrec_checkpoint("Video_Games", str(tmp_path / "runs"))
+
+
+def test_default_sasrec_checkpoint_missing_falls_back(tmp_path):
+    path = default_sasrec_checkpoint("Video_Games", str(tmp_path / "runs"))
+    assert path.endswith("Video_Games_sasrec_bce1/best.pt")  # 由调用方给出建卡提示
+
+
+# --------------------------------------------------------------------------- #
 # SASRec 编码器
 # --------------------------------------------------------------------------- #
 
@@ -121,6 +168,29 @@ class TestSASRecEncoder:
         from src.reward.user_represent import build_user_encoder
 
         return build_user_encoder("sasrec", checkpoint=str(GAMES_SASREC), device="cpu")
+
+    def test_rebuild_from_bare_state_dict_matches_forward(self, tmp_path):
+        """非默认超参 + 裸 state_dict(无 config)也能正确重建。
+
+        复刻实际踩坑的 checkpoint: hidden=128, 2 层, d_inner=256(恰为
+        SASRec 签名默认)。重建后前向必须与原模型逐值一致。
+        """
+        import torch
+        from src.models.sasrec import SASRec
+        from src.reward.user_represent.sasrec_encoder import SASRecHiddenStateEncoder
+
+        torch.manual_seed(0)
+        ref = SASRec(n_items=99, max_seq_len=10, hidden=128, n_layers=2,
+                     n_heads=2, d_inner=256).eval()
+        ckpt = tmp_path / "bare.pt"
+        torch.save(ref.state_dict(), ckpt)  # 裸 state_dict, 无 config
+
+        enc = SASRecHiddenStateEncoder(checkpoint=str(ckpt), device="cpu", n_heads=2)
+        assert enc.dim == 128
+        hist = [[1, 2, 3], [4, 5]]
+        with torch.no_grad():
+            expect = torch.nn.functional.normalize(ref.last_hidden(enc._collate(hist)), dim=1)
+        assert np.allclose(enc.encode_histories(hist), expect.numpy(), atol=1e-5)
 
     def test_shape_and_normalized(self):
         enc = self._encoder()

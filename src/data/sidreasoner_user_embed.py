@@ -124,9 +124,47 @@ def default_embedding_path(category: str, encoder_type: str) -> str:
     return os.path.join("runs", "sidreasoner", "user_embed", f"{category}_{encoder_type}.npz")
 
 
-def default_sasrec_checkpoint(category: str) -> str:
-    """按训练脚本命名约定找 <Category>_sasrec_bce1/best.pt。"""
-    return os.path.join("runs", f"{category}_sasrec_bce1", "best.pt")
+def default_sasrec_checkpoint(category: str, runs_root: str = "runs") -> str:
+    """自动定位 SASRec checkpoint: runs/<Category>_sasrec_<loss>/best.pt。
+
+    只匹配 config/sasrec.py 的合法 loss 名(bce1/bce/ce), 排除其他
+    借用 sasrec 前缀的目录(如 MiniOneRec 的 *_sasrec_mini[lionerec],
+    架构不同无法被本编码器加载):
+    - 唯一候选 -> 直接用(如 <C>_sasrec_bce / <C>_sasrec_bce1 均可);
+    - 多个候选 -> 优先 config/sasrec.py 默认 loss 的命名, 仍不唯一则
+      报错并列出候选(用 --sasrec-checkpoint 或 config
+      rl.inter_query_diversity.sasrec_checkpoint 显式指定其一);
+    - 无候选 -> 返回默认命名路径(由调用方给出建卡提示)。
+    """
+    import glob as _glob
+
+    try:
+        sas_cfg = load_config("sasrec")["training"]
+        losses = list(sas_cfg.get("loss_choices", ["bce1", "bce", "ce"]))
+        preferred_loss = sas_cfg.get("loss")
+    except Exception:
+        losses, preferred_loss = ["bce1", "bce", "ce"], None
+
+    candidates = sorted(
+        os.path.join(runs_root, f"{category}_sasrec_{loss}", "best.pt")
+        for loss in losses
+        if os.path.exists(os.path.join(runs_root, f"{category}_sasrec_{loss}", "best.pt"))
+    )
+    if not candidates:
+        return os.path.join(runs_root, f"{category}_sasrec_bce1", "best.pt")
+    if preferred_loss:
+        preferred = os.path.join(
+            runs_root, f"{category}_sasrec_{preferred_loss}", "best.pt"
+        )
+        if preferred in candidates:
+            return preferred
+    if len(candidates) == 1:
+        return candidates[0]
+    raise FileNotFoundError(
+        f"发现多个 SASRec checkpoint: {candidates}。请用 --sasrec-checkpoint "
+        "(或 user_embed.sh 的 SASREC_CKPT=) / config 的 "
+        "rl.inter_query_diversity.sasrec_checkpoint 显式指定其一。"
+    )
 
 
 def extract(
@@ -250,7 +288,7 @@ def main(argv=None, cfg=None):
         )
         if not os.path.exists(ckpt):
             raise FileNotFoundError(
-                f"未找到 SASRec checkpoint: {ckpt}。先运行 DATASET=... make <dataset>-sasrec, "
+                f"未找到 SASRec checkpoint: {ckpt}。先运行 make <dataset>-sasrec, "
                 "或用 --sasrec-checkpoint / --encoder bge_mean 指定其他来源。"
             )
         from src.reward.user_represent import build_user_encoder
