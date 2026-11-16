@@ -53,25 +53,28 @@ intrinsic 零方差)。四个独立开关(默认均保持原行为):
 | 参数 | 取值 | 作用 |
 |---|---|---|
 | `success_mode` | `full`(默认)/`prefix`/`none` | I 的口径: 三级全匹配 / 首层 code 匹配 / 不做正确性约束(仅要求答案可解析) |
-| `reference_mode` | `success`(默认)/`any` | 邻居 Reference: 仅成功 rollout / 无成功时退回任一可解析 CoT |
+| `reference_mode` | `full`(默认)/`prefix`/`none` | 邻居 Reference 准入: 三级全匹配 / 首层 code 匹配 / 退回任一可解析 CoT(优先级 full > prefix > any; 旧值 `success`/`any` 兼容) |
 | `bleu_smoothing` | `none`(默认)/`method1` | DIVER 无平滑(自然语言 CoT 上 BLEU 常为 0, TD 饱和到 1)/ nltk add-1 平滑 |
 | `td_norm` | `none`(默认)/`rank` | 无 / 组内秩归一化: TD 按秩映射到 [0,1] 均布(仅 I=1 的 rollout 参与), 保证 GRPO 组内区分度由 λ·σ 直接控制; rank 模式建议 `sigma=1.0` |
 
 在 32 query x 8 rollout 的真实 probe batch 上实测(Video_Games, Stage 2):
 
-| 配置 | success | intrinsic 零方差组 | intrinsic 组内 std | intrinsic 均值 |
-|---|---|---|---|---|
-| full/success/none/none(原版) | 1.2% | 93.8% | 0.004 | 0.002 |
-| prefix/any/method1/none | 11.3% | 56.2% | 0.032 | 0.022 |
-| prefix/any/method1/rank | 11.3% | 84.4% | 0.011 | 0.008 |
-| none/any/method1/rank | 98.8% | **0.0%** | 0.066 | 0.099 |
+| 配置(success/ref/smooth/norm) | success | n_refs | intrinsic 零方差组 | intrinsic 组内 std | intrinsic 均值 |
+|---|---|---|---|---|---|
+| full/full/none/none(原版) | 1.2% | 0.59 | 93.8% | 0.002 | 0.001 |
+| prefix/prefix/method1/none | 11.3% | 3.41 | 56.2% | 0.032 | 0.022 |
+| prefix/prefix/method1/rank | 11.3% | 3.41 | 84.4% | 0.011 | 0.008 |
+| prefix/full/method1/rank | 11.3% | 0.59 | 84.4% | 0.010 | 0.008 |
+| none/none/method1/rank | 98.8% | 8.00 | **0.0%** | 0.066 | 0.099 |
 
 要点: (1) 只去掉成功门而不做秩归一化, TD≈1 的组内常数平移会被 GRPO
-advantage 的均值消去, 几乎不产生学习信号; (2) 秩归一化把组内排序变成
-信号, 但若仍保留强正确性门(prefix), 大量组只有 0~1 条可塑形 rollout,
-零方差组占比仍高; (3) `none/any/rank` 让每个组都有区分度, 代价是多样性
-项不再与正确性挂钩(需保证 λ·σ 小于相邻 base 奖励档差, 如 steprule 的
-0.25, 避免排序反转; λ=0.2, σ=1.0 时最大差 0.2 < 0.25)。
+advantage 的均值消去, 几乎不产生学习信号; (2) 秩归一化的组内区分度只在
+"每组 >=2 条可塑形 rollout"时成立: prefix 门(约 11% rollout 通过)下大量
+组只有 0~1 条通过, 零方差组占比反而高于不做 rank; (3) `none/none/rank`
+让每个组都有区分度, 代价是多样性项不再与正确性挂钩(需保证 λ·σ 小于
+相邻 base 奖励档差, 如 steprule 的 0.25, 避免排序反转; λ=0.2, σ=1.0 时
+最大差 0.2 < 0.25)。reference 门只影响 TD 覆盖率(见 n_refs 列), 不影响
+塑形覆盖; 塑形覆盖由 success_mode 决定。
 
 ---
 

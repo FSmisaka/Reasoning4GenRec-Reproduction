@@ -216,9 +216,10 @@ CONFIG: Dict[str, Any] = {
             #   成功率 ~1%, "full" 会让 intrinsic 几乎恒 0; 可选:
             #   full(三级全匹配)| prefix(首层 code 匹配)| none(不做正确性约束)
             "success_mode": "full",
-            # reference_mode: 邻居 Reference 来源。success=仅成功 rollout;
-            #   any=无成功 rollout 时退回任一可解析 CoT(低成功率下保证 TD 可算)
-            "reference_mode": "success",
+            # reference_mode: 邻居 Reference 准入档位。full=邻居三级全匹配;
+            #   prefix=邻居首层 code 匹配即可; none=退回任一可解析 CoT
+            #   (优先级 full > prefix > any; 旧值 success/any 仍兼容)
+            "reference_mode": "full",
             # bleu_smoothing: none(DIVER 官方无平滑, 自然语言 CoT 上 BLEU
             #   常为 0 -> TD 饱和到 1)| method1(nltk add-1 平滑, 有真实区分度)
             "bleu_smoothing": "none",

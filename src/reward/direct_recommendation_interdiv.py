@@ -100,7 +100,7 @@ def _get_addon(kwargs: dict):
             log_every=int(kwargs.get("log_every", 1)),
             seed=kwargs.get("seed", 0),
             success_mode=str(kwargs.get("success_mode", "full")),
-            reference_mode=str(kwargs.get("reference_mode", "success")),
+            reference_mode=str(kwargs.get("reference_mode", "full")),
             bleu_smoothing=str(kwargs.get("bleu_smoothing", "none")),
             td_norm=str(kwargs.get("td_norm", "none")),
         )

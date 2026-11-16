@@ -27,7 +27,7 @@ import time
 import numpy as np
 
 from .bleu import DiverBleu
-from .cot_utils import extract_cot, is_recommendation_success
+from .cot_utils import extract_cot, recommendation_match
 from .neighbor import build_same_user_mask, topk_neighbors
 from .shaping import lambda_at, rank_normalize, shape_rewards
 from .user_store import UserEmbeddingStore
@@ -67,10 +67,10 @@ class InterQueryDiversityAddon:
 
         success_mode: 条件塑形指示 I 的口径("full" 三级全匹配 /
             "prefix" 首层匹配 / "none" 不设正确性约束)。
-        reference_mode: 邻居 Reference 的来源("success" 仅成功 rollout /
-            "any" 无成功 rollout 时退回任一可解析 CoT)。低成功率阶段
-            (如 Stage 2 起点)默认口径会让 intrinsic 恒 0, 可改用
-            prefix/none + any 提高覆盖。
+        reference_mode: 邻居 Reference 的准入档位("full" 仅三级全匹配 /
+            "prefix" 首层 code 匹配即可 / "none" 退回任一可解析 CoT,
+            优先级 full > prefix > any)。低成功率阶段(如 Stage 2 起点)
+            默认口径会让 intrinsic 恒 0, 可逐级放宽。
         bleu_smoothing: "none"(DIVER 官方) / "method1"(add-1 平滑,
             5-gram 不再几乎恒为 0, TD 有真实区分度)。
         td_norm: "none" / "rank"。rank = 把每个 GRPO 组内(仅 I=1 的
@@ -87,10 +87,14 @@ class InterQueryDiversityAddon:
             raise ValueError(
                 f"未知 success_mode: {success_mode!r}(full | prefix | none)"
             )
-        self.reference_mode = str(reference_mode)
-        if self.reference_mode not in ("success", "any"):
+        # 三档: full=邻居三级全匹配 / prefix=邻居首层匹配 / none=退回任一
+        # 可解析 CoT(优先级 full > prefix > any); 兼容旧别名 success/any
+        ref_alias = {"success": "full", "any": "none"}
+        self.reference_mode = ref_alias.get(str(reference_mode), str(reference_mode))
+        if self.reference_mode not in ("full", "prefix", "none"):
             raise ValueError(
-                f"未知 reference_mode: {reference_mode!r}(success | any)"
+                f"未知 reference_mode: {reference_mode!r}"
+                "(full | prefix | none; 旧别名 success/any 亦兼容)"
             )
         self.td_norm = str(td_norm)
         if self.td_norm not in ("none", "rank"):
@@ -202,18 +206,27 @@ class InterQueryDiversityAddon:
             user_emb, self.top_k, exclude=exclude, device=self.device
         )
 
-        # ---- 逐 query: 成功 rollout 与 reference CoT ----
+        # ---- 逐 query: 匹配度 / 成功指示 / reference CoT ----
+        parsed_flags: dict = {}
+        prefix_lens: dict = {}
         success_flags: dict = {}
         cots: dict = {}
         for q_i, key in enumerate(train_keys):
             for r in groups[key]:
                 row = rows[r]
-                ok = is_recommendation_success(
-                    row["solution_str"],
-                    row["ground_truth"],
-                    mode=self.success_mode,
+                parsed, plen = recommendation_match(
+                    row["solution_str"], row["ground_truth"]
                 )
+                parsed_flags[r] = parsed
+                prefix_lens[r] = plen
+                if self.success_mode == "none":
+                    ok = parsed
+                elif self.success_mode == "prefix":
+                    ok = parsed and plen >= 1
+                else:  # full
+                    ok = parsed and plen >= 3
                 results[r]["success"] = int(ok)
+                results[r]["prefix_len"] = int(plen)
                 success_flags[r] = ok
                 cots[r] = extract_cot(row["solution_str"])
                 results[r]["cot_ok"] = int(
@@ -221,23 +234,27 @@ class InterQueryDiversityAddon:
                     and len(cots[r].split()) >= _MIN_COT_TOKENS
                 )
 
+        def _usable(r) -> bool:
+            return results[r]["cot_ok"] == 1
+
         def pick_reference(row_ids: list):
             """从某 query 的 rollouts 里挑一个参考 CoT。
 
-            reference_mode=success: 只挑"推荐成功"的 CoT;
-            reference_mode=any: 优先成功 CoT, 没有则任意可解析 CoT。
+            reference_mode=full:   只挑三级全匹配的 CoT;
+            reference_mode=prefix: 首层 code 匹配即可;
+            reference_mode=none:   退回任一可解析 CoT(优先级 full > prefix > any)。
             """
-            usable = [
-                cots[r]
-                for r in row_ids
-                if cots[r] is not None and len(cots[r].split()) >= _MIN_COT_TOKENS
+            full_pool = [cots[r] for r in row_ids if _usable(r) and prefix_lens[r] >= 3]
+            prefix_pool = [
+                cots[r] for r in row_ids if _usable(r) and prefix_lens[r] >= 1
             ]
-            winners = [cots[r] for r in row_ids if success_flags[r]
-                       and cots[r] is not None
-                       and len(cots[r].split()) >= _MIN_COT_TOKENS]
-            pool = winners if winners else (
-                usable if self.reference_mode == "any" else []
-            )
+            any_pool = [cots[r] for r in row_ids if _usable(r)]
+            if self.reference_mode == "full":
+                pool = full_pool
+            elif self.reference_mode == "prefix":
+                pool = prefix_pool
+            else:  # none: 逐级退回
+                pool = full_pool or prefix_pool or any_pool
             return self.rng.choice(pool) if pool else None
 
         references = {

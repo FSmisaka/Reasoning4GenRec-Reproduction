@@ -386,7 +386,7 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             "sigma": iqd.get("sigma", 0.5),
             "seed": iqd.get("seed", 0),
             "success_mode": iqd.get("success_mode", "full"),
-            "reference_mode": iqd.get("reference_mode", "success"),
+            "reference_mode": iqd.get("reference_mode", "full"),
             "bleu_smoothing": iqd.get("bleu_smoothing", "none"),
             "td_norm": iqd.get("td_norm", "none"),
             # 探针的 interdiv 日志独立落盘, 不污染训练的 interdiv_metrics.jsonl

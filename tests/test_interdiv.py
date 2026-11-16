@@ -635,6 +635,67 @@ def test_addon_rejects_unknown_modes(addon):
         )
 
 
+def test_reference_mode_full_prefix_none(addon):
+    gt = GT
+    # 邻居三级全匹配: 三档都可用
+    for mode in ("full", "prefix", "none"):
+        ad, _, _ = addon(n_queries=2, rollout_n=4, top_k_neighbors=1)
+        ad.reference_mode = mode
+        rows = _make_batch([("train", 0, "cur"), ("train", 1, "nbr")], rollout_n=4)
+        for r in rows[4:]:
+            r["solution_str"] = _resp("a neighbor chain of thought text", gt)
+        out = ad.compute_batch(rows, [0.0] * len(rows))
+        assert {r["n_refs"] for r in out[:4]} == {1}, mode
+
+    # 邻居只匹配首层: full 不可用, prefix/none 可用
+    one_level = "<a_1><b_9><c_9>"
+    ad, _, _ = addon(n_queries=2, rollout_n=4, top_k_neighbors=1)
+    ad.reference_mode = "full"
+    rows = _make_batch([("train", 0, "c"), ("train", 1, "n")], rollout_n=4)
+    for r in rows[4:]:
+        r["solution_str"] = _resp("a neighbor chain of thought text", one_level)
+    out = ad.compute_batch(rows, [0.0] * len(rows))
+    assert {r["n_refs"] for r in out[:4]} == {0}
+
+    for mode in ("prefix", "none"):
+        ad, _, _ = addon(n_queries=2, rollout_n=4, top_k_neighbors=1)
+        ad.reference_mode = mode
+        rows = _make_batch([("train", 0, "c"), ("train", 1, "n")], rollout_n=4)
+        for r in rows[4:]:
+            r["solution_str"] = _resp("a neighbor chain of thought text", one_level)
+        out = ad.compute_batch(rows, [0.0] * len(rows))
+        assert {r["n_refs"] for r in out[:4]} == {1}, mode
+
+    # 邻居完全不匹配: 仅 none 可用
+    wrong = "<a_9><b_9><c_9>"
+    for mode, expect in (("full", {0}), ("prefix", {0}), ("none", {1})):
+        ad, _, _ = addon(n_queries=2, rollout_n=4, top_k_neighbors=1)
+        ad.reference_mode = mode
+        rows = _make_batch([("train", 0, "c"), ("train", 1, "n")], rollout_n=4)
+        for r in rows[4:]:
+            r["solution_str"] = _resp("a neighbor chain of thought text", wrong)
+        out = ad.compute_batch(rows, [0.0] * len(rows))
+        assert {r["n_refs"] for r in out[:4]} == expect, mode
+
+    # 邻居 CoT 不可解析: 三档都不可用
+    for mode in ("full", "prefix", "none"):
+        ad, _, _ = addon(n_queries=2, rollout_n=4, top_k_neighbors=1)
+        ad.reference_mode = mode
+        rows = _make_batch([("train", 0, "c"), ("train", 1, "n")], rollout_n=4)
+        for r in rows[4:]:
+            r["solution_str"] = "no closing think tag"
+        out = ad.compute_batch(rows, [0.0] * len(rows))
+        assert {r["n_refs"] for r in out[:4]} == {0}, mode
+
+
+def test_reference_mode_legacy_aliases(addon):
+    ad, _, _ = addon(n_queries=2, rollout_n=2)
+    path = ad.store.path
+    base = dict(user_embedding_path=path, metrics_path=ad.metrics_path + ".alias")
+    assert InterQueryDiversityAddon(**base, reference_mode="success").reference_mode == "full"
+    assert InterQueryDiversityAddon(**base, reference_mode="any").reference_mode == "none"
+
+
 # --------------------------------------------------------------------------- #
 # verl 入口(direct_recommendation_interdiv)
 # --------------------------------------------------------------------------- #

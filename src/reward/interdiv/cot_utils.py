@@ -38,27 +38,40 @@ def extract_cot(response_str: str) -> str | None:
     return response_str[start:close].strip()
 
 
-def recommendation_prefix_len(
+def recommendation_match(
     solution_str: str, ground_truth, extract_solution_fn=None, num_sid: int = 3
-) -> int:
-    """采样答案与 ground truth 沿 SID 层级的连续前缀匹配长度(0..num_sid)。"""
+):
+    """一次解析返回 (answer_parsed, prefix_len)。
+
+    answer_parsed: 能否从响应尾部解析出完整 SID 三元组;
+    prefix_len: 与 ground truth 沿层级的连续前缀匹配长度(0..num_sid)。
+    """
     if extract_solution_fn is None:
         from src.reward.sid_rewards.base import extract_solution as extract_solution_fn
 
     answer = extract_solution_fn(solution_str, num_sid=num_sid)
-    if answer is None or not ground_truth:
-        return 0
-
+    if answer is None:
+        return False, 0
     from src.reward.sid_rewards.base import extract_sid_tokens
 
-    gt = extract_sid_tokens(str(ground_truth))[:num_sid]
+    gt = extract_sid_tokens(str(ground_truth or ""))[:num_sid]
     if len(gt) != num_sid:
-        return 0
+        return True, 0
     matched = 0
     for pred, gold in zip(answer, gt):
         if pred != gold:
             break
         matched += 1
+    return True, matched
+
+
+def recommendation_prefix_len(
+    solution_str: str, ground_truth, extract_solution_fn=None, num_sid: int = 3
+) -> int:
+    """采样答案与 ground truth 沿 SID 层级的连续前缀匹配长度(0..num_sid)。"""
+    _, matched = recommendation_match(
+        solution_str, ground_truth, extract_solution_fn=extract_solution_fn, num_sid=num_sid
+    )
     return matched
 
 
@@ -80,13 +93,12 @@ def is_recommendation_success(
     """
     if mode not in SUCCESS_MODES:
         raise ValueError(f"未知 success mode: {mode!r}, 可选 {SUCCESS_MODES}")
-    if mode == "none":
-        # 不做正确性约束, 但仍要求答案可解析(格式坏/截断的 rollout 不参与)
-        if extract_solution_fn is None:
-            from src.reward.sid_rewards.base import extract_solution as extract_solution_fn
-
-        return extract_solution_fn(solution_str, num_sid=num_sid) is not None
-    matched = recommendation_prefix_len(
+    parsed, matched = recommendation_match(
         solution_str, ground_truth, extract_solution_fn=extract_solution_fn, num_sid=num_sid
     )
+    if not parsed:
+        return False
+    if mode == "none":
+        # 不做正确性约束, 但仍要求答案可解析(格式坏/截断的 rollout 不参与)
+        return True
     return matched >= (num_sid if mode == "full" else 1)
