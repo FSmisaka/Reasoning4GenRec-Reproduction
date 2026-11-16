@@ -152,6 +152,8 @@ def aggregate(rows: list, results: list, components=_DEFAULT_COMPONENTS) -> dict
                     rec[c] = results[r][c]
             if "success" in results[r]:
                 rec["success"] = int(results[r]["success"])
+            if "cot_ok" in results[r]:
+                rec["cot_ok"] = int(results[r]["cot_ok"])
             rec["cot_chars"] = len((rows[r]["solution_str"] or "").split("</think>")[0])
             rollouts.append(rec)
 
@@ -169,9 +171,25 @@ def aggregate(rows: list, results: list, components=_DEFAULT_COMPONENTS) -> dict
         from src.reward.interdiv.cot_utils import extract_cot
 
         cots = [extract_cot(rows[r]["solution_str"]) or "" for r in idxs]
+        n_refs = results[idxs[0]].get("n_refs")
+        cot_ok_rate = float(
+            np.mean([results[r].get("cot_ok", 0) for r in idxs])
+        )
+        td_all_zero = all(float(rl.get("td", 0.0)) == 0.0 for rl in rollouts)
+        if not td_all_zero:
+            reason = None
+        elif n_refs == 0:
+            reason = "no_valid_reference"       # 邻居无成功 rollout / 无可用 CoT
+        elif cot_ok_rate == 0.0:
+            reason = "no_usable_cot"            # 本组 CoT 全部不可解析(截断等)
+        else:
+            reason = "cot_identical_to_refs"    # CoT 与参考完全一致(BLEU=1 -> td=0)
         group_reports.append(
             {
                 "query": {"split": key[0], "index": key[1]},
+                "n_refs": n_refs,
+                "cot_ok_rate": cot_ok_rate,
+                "td_all_zero_reason": reason,
                 "rollouts": rollouts,
                 "within_group_cot_sim": within_group_cot_similarity(cots, DiverBleu()),
                 "component_stats": stats,
@@ -205,6 +223,31 @@ def aggregate(rows: list, results: list, components=_DEFAULT_COMPONENTS) -> dict
         )
         if group_reports
         else None,
+        "mean_cot_ok_rate": float(
+            np.mean([g["cot_ok_rate"] for g in group_reports])
+        )
+        if group_reports
+        else None,
+        "mean_n_refs": float(
+            np.mean([g["n_refs"] for g in group_reports if g["n_refs"] is not None])
+        )
+        if any(g["n_refs"] is not None for g in group_reports)
+        else None,
+        "groups_td_all_zero": {
+            "total": sum(1 for g in group_reports if g["td_all_zero_reason"] is not None),
+            "no_valid_reference": sum(
+                1 for g in group_reports
+                if g["td_all_zero_reason"] == "no_valid_reference"
+            ),
+            "no_usable_cot": sum(
+                1 for g in group_reports
+                if g["td_all_zero_reason"] == "no_usable_cot"
+            ),
+            "cot_identical_to_refs": sum(
+                1 for g in group_reports
+                if g["td_all_zero_reason"] == "cot_identical_to_refs"
+            ),
+        },
     }
     return {"summary": summary, "groups": group_reports}
 
@@ -342,6 +385,10 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             "gamma": iqd.get("gamma", 1.0),
             "sigma": iqd.get("sigma", 0.5),
             "seed": iqd.get("seed", 0),
+            "success_mode": iqd.get("success_mode", "full"),
+            "reference_mode": iqd.get("reference_mode", "success"),
+            "bleu_smoothing": iqd.get("bleu_smoothing", "none"),
+            "td_norm": iqd.get("td_norm", "none"),
             # 探针的 interdiv 日志独立落盘, 不污染训练的 interdiv_metrics.jsonl
             "metrics_path": os.path.join(out_dir, "interdiv_probe_metrics.jsonl"),
         }
@@ -489,11 +536,19 @@ def main(argv=None, cfg=None):
     s = report["summary"]
     print(f"[probe] -> {out_path}")
     print(f"[probe] groups={s['n_groups']} G={s['rollout_n_per_group']} "
-          f"success={s.get('success_rate')}")
+          f"success={s.get('success_rate')} cot_ok={s.get('mean_cot_ok_rate')} "
+          f"n_refs={s.get('mean_n_refs')}")
     for c, st in s["per_component"].items():
         print(
             f"[probe] {c:12s} 组内std均值={st['mean_group_std']:.6g} "
             f"零方差组占比={st['frac_groups_zero_variance']:.1%}"
+        )
+    z = s["groups_td_all_zero"]
+    if z["total"]:
+        print(
+            f"[probe] td 全零组: {z['total']}/{s['n_groups']} "
+            f"(无有效 Reference {z['no_valid_reference']} / CoT 不可解析 "
+            f"{z['no_usable_cot']} / CoT 与参考雷同 {z['cot_identical_to_refs']})"
         )
     print(f"[probe] 组内 CoT 成对 BLEU 相似度均值 = {s['mean_within_group_cot_sim']:.4f} "
           "(越高说明同组 CoT 越雷同, BLEU 项越难区分)")

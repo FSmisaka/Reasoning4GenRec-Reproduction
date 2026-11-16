@@ -104,6 +104,34 @@ def test_aggregate_reports_within_group_discrimination():
     assert report["summary"]["success_rate"] == pytest.approx(5 / 6)
 
 
+def test_aggregate_classifies_td_all_zero_reasons():
+    """td 全零的原因分解: 无 Reference / CoT 不可解析 / 与参考雷同。"""
+    rows = _rows()  # 2 组 x 3 rollouts
+    results = [
+        # 组 0: n_refs=0(邻居没有成功 rollout) -> no_valid_reference
+        {"score": 0.0, "td": 0.0, "intrinsic": 0.0, "success": 0, "n_refs": 0, "cot_ok": 1},
+        {"score": 0.0, "td": 0.0, "intrinsic": 0.0, "success": 0, "n_refs": 0, "cot_ok": 1},
+        {"score": 0.0, "td": 0.0, "intrinsic": 0.0, "success": 0, "n_refs": 0, "cot_ok": 1},
+        # 组 1: 有 refs 但本组 CoT 全部不可解析 -> no_usable_cot
+        {"score": 0.0, "td": 0.0, "intrinsic": 0.0, "success": 0, "n_refs": 3, "cot_ok": 0},
+        {"score": 0.0, "td": 0.0, "intrinsic": 0.0, "success": 0, "n_refs": 3, "cot_ok": 0},
+        {"score": 0.0, "td": 0.0, "intrinsic": 0.0, "success": 0, "n_refs": 3, "cot_ok": 0},
+    ]
+    report = aggregate(rows, results)
+    g = {x["query"]["index"]: x for x in report["groups"]}
+    assert g[0]["td_all_zero_reason"] == "no_valid_reference"
+    assert g[1]["td_all_zero_reason"] == "no_usable_cot"
+    z = report["summary"]["groups_td_all_zero"]
+    assert z == {
+        "total": 2,
+        "no_valid_reference": 1,
+        "no_usable_cot": 1,
+        "cot_identical_to_refs": 0,
+    }
+    assert report["summary"]["mean_n_refs"] == pytest.approx(1.5)
+    assert report["summary"]["mean_cot_ok_rate"] == pytest.approx(0.5)
+
+
 # --------------------------------------------------------------------------- #
 # preset / 参数解析
 # --------------------------------------------------------------------------- #

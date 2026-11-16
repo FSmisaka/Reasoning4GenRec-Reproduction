@@ -244,7 +244,7 @@ $(eval $(call SIDREASONER_CURVES_TARGET,industrial))
 # ARGS 传参如 ARGS="--n-queries 32 --rollout-n 8 --reward bleu", MODEL= 覆盖策略)
 define SIDREASONER_REWARD_PROBE_TARGET
 $(1)-sidreasoner-reward-probe:
-	DATASET=$(1) $(PY) -m src.eval.sidreasoner_reward_probe $$$${ARGS:--}
+	DATASET=$(1) $(PY) -m src.eval.sidreasoner_reward_probe $$$${ARGS:-}
 endef
 $(eval $(call SIDREASONER_REWARD_PROBE_TARGET,games))
 $(eval $(call SIDREASONER_REWARD_PROBE_TARGET,office))

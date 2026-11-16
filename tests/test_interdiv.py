@@ -22,7 +22,7 @@ sys.path.insert(0, str(R4GR_ROOT))
 from src.reward.interdiv.bleu import DiverBleu  # noqa: E402
 from src.reward.interdiv.cot_utils import extract_cot, is_recommendation_success  # noqa: E402
 from src.reward.interdiv.neighbor import build_same_user_mask, topk_neighbors  # noqa: E402
-from src.reward.interdiv.shaping import lambda_at, shape_rewards  # noqa: E402
+from src.reward.interdiv.shaping import lambda_at, rank_normalize, shape_rewards  # noqa: E402
 from src.reward.interdiv.user_store import UserEmbeddingStore  # noqa: E402
 from src.reward.interdiv.reward import InterQueryDiversityAddon  # noqa: E402
 
@@ -79,6 +79,22 @@ def test_bleu_div_len_truncates():
     c = head + " " + " ".join(f"other{i}" for i in range(200))
     # 前 50 字符相同 -> 截断后近似同一文本
     assert b.similarity(a, c) > 0.5
+
+
+def test_bleu_method1_smoothing_gives_partial_similarity():
+    """add-1 平滑: 无共享 5-gram 的不同文本仍有非零相似度(有区分度)。"""
+    a = "the user prefers action games and has bought several controllers this year"
+    c = "this user likes racing titles and purchased a few headsets recently"
+    assert DiverBleu(smoothing="none").similarity(a, c) == 0.0
+    sim = DiverBleu(smoothing="method1").similarity(a, c)
+    assert 0.0 < sim < 0.5
+    # 同文仍为 1
+    assert DiverBleu(smoothing="method1").similarity(a, a) == pytest.approx(1.0)
+
+
+def test_bleu_unknown_smoothing_raises():
+    with pytest.raises(ValueError):
+        DiverBleu(smoothing="nope")
 
 
 def test_bleu_short_text_returns_zero():
@@ -151,6 +167,23 @@ def test_success_not_confused_with_positive_reward():
         assert not is_recommendation_success(wrong, GT)
         assert rc.compute("rec/x", resp, GT, None) > 0.0
         assert is_recommendation_success(resp, GT)
+
+
+def test_success_modes_full_prefix_none():
+    """full=三级全匹配; prefix=首层匹配; none=答案可解析即可。"""
+    gt = GT  # <a_1><b_2><c_3>
+    one_level = _resp("cot", "<a_1><b_9><c_9>")
+    two_level = _resp("cot", "<a_1><b_2><c_9>")
+    assert not is_recommendation_success(one_level, gt)                     # full
+    assert not is_recommendation_success(two_level, gt)
+    assert is_recommendation_success(one_level, gt, mode="prefix")          # prefix
+    assert is_recommendation_success(two_level, gt, mode="prefix")
+    assert not is_recommendation_success(_resp("cot", "<a_9><b_9><c_9>"), gt, mode="prefix")
+    assert is_recommendation_success(_resp("cot", "<a_9><b_9><c_9>"), gt, mode="none")
+    # none 仍要求答案可解析(无 </think> 不算)
+    assert not is_recommendation_success("no close tag", gt, mode="none")
+    with pytest.raises(ValueError):
+        is_recommendation_success(one_level, gt, mode="bogus")
 
 
 # --------------------------------------------------------------------------- #
@@ -340,6 +373,18 @@ def test_shape_zero_td_when_no_neighbors():
     td = np.array([0.0])
     intrinsic, aug = shape_rewards(base, success, td, lam=0.5, sigma=1.0)
     assert intrinsic[0] == 0.0 and aug[0] == pytest.approx(1.0)
+
+
+def test_rank_normalize_distinct_ties_single():
+    norm = rank_normalize([0.5, 0.9, 0.1, 0.3])
+    assert sorted(norm) == pytest.approx([0.0, 1/3, 2/3, 1.0])
+    # 并列取平均秩
+    tied = rank_normalize([0.2, 0.2, 0.5])
+    assert tied[0] == tied[1] == pytest.approx(0.25)  # 平均秩 0.5 -> 0.25
+    assert tied[2] == pytest.approx(1.0)
+    # 单元素 / 全并列
+    assert rank_normalize([0.7]).tolist() == [0.0]
+    assert rank_normalize([0.3, 0.3]).tolist() == [0.5, 0.5]
 
 
 # --------------------------------------------------------------------------- #
@@ -532,6 +577,62 @@ def test_addon_lambda_decays_over_steps(addon):
     intr_last = [r["intrinsic"] for r in last if r["success"]]
     assert all(x > 0 for x in intr1)
     assert all(x == pytest.approx(0.0) for x in intr_last)  # 衰减到 0
+
+
+def test_addon_td_norm_rank_spreads_within_group(addon, tmp_path):
+    """rank 归一化: 组内 td_used 映射到 [0,1] 均布, intrinsic 顺序随之。"""
+    ad, n_q, g = addon(n_queries=2, rollout_n=4, top_k_neighbors=1,
+                       lambda_init=0.3, sigma=1.0, td_norm="rank",
+                       success_mode="none", reference_mode="any",
+                       bleu_smoothing="method1")
+    rows = _make_batch([("train", 0, "alpha"), ("train", 1, "beta")], rollout_n=4)
+    # 把 query0 的 4 条 CoT 换成主题词完全不同的文本, 避免秩并列
+    topics = ["racing wheels and steering controllers for the console setup",
+              "puzzle quests with mythical creatures and hidden treasure maps",
+              "shooter titles with competitive multiplayer ranking ladders",
+              "family party games with motion controls for group play"]
+    for j, t in enumerate(topics):
+        rows[j]["solution_str"] = _resp(t, GT)
+    out = ad.compute_batch(rows, [0.0] * len(rows))
+    group0 = out[:4]
+    assert all(r["success"] == 1 for r in group0)
+    used = sorted(r["td_used"] for r in group0)
+    assert used[0] == pytest.approx(0.0, abs=1e-6)
+    assert used[-1] == pytest.approx(1.0, abs=1e-6)
+    assert sum(used) / 4 == pytest.approx(0.5, abs=1e-6)
+    # intrinsic = λ·td_used(λ=0.3, σ=1.0), 允许并列秩
+    ordered = sorted(group0, key=lambda r: r["td_used"])
+    assert [r["intrinsic"] for r in ordered] == pytest.approx(
+        [0.3 * r["td_used"] for r in ordered], abs=1e-6
+    )
+    # td 字段保留原始值
+    assert all("td" in r for r in group0)
+
+
+def test_addon_td_norm_rank_single_eligible_zero(addon):
+    """组内仅 1 条可塑形 rollout -> 无可比对象, 秩归一化后 td_used=0。"""
+    ad, n_q, g = addon(n_queries=2, rollout_n=4, top_k_neighbors=1,
+                       lambda_init=0.3, sigma=1.0, td_norm="rank")
+    rows = _make_batch([("train", 0, "a"), ("train", 1, "b")], rollout_n=4)
+    # 只保留 query0 第 0 条为成功, 其余改失败
+    for i, r in enumerate(rows):
+        if i != 0:
+            r["solution_str"] = _resp("cot", "<a_9><b_9><c_9>")
+    out = ad.compute_batch(rows, [0.0] * len(rows))
+    assert out[0]["success"] == 1
+    assert out[0]["td_used"] == 0.0
+    assert out[0]["intrinsic"] == 0.0
+
+
+def test_addon_rejects_unknown_modes(addon):
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        InterQueryDiversityAddon(
+            user_embedding_path=addon(n_queries=2)[0].store.path,
+            metrics_path=str(addon(n_queries=2)[0].metrics_path) + ".x",
+            td_norm="bogus2",
+        )
 
 
 # --------------------------------------------------------------------------- #

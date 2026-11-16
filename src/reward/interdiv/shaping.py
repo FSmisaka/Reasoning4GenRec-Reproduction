@@ -62,3 +62,24 @@ def shape_rewards(
     clipped = np.clip(discounted, 0.0, float(sigma))
     intrinsic = float(lam) * success.astype(np.float64) * clipped
     return intrinsic, base + intrinsic
+
+
+def rank_normalize(values) -> "np.ndarray":
+    """把一组值按秩映射到 [0, 1] 均布(并列取平均秩, n<2 返回全 0)。
+
+    用于 td_norm="rank": GRPO 只关心组内相对排序, 而 TD 的组内绝对差
+    通常只有 ~0.01; 秩归一化让组内区分度由 lambda*sigma 直接控制。
+    """
+    vals = np.asarray(values, dtype=np.float64)
+    n = vals.size
+    if n < 2:
+        return np.zeros(n, dtype=np.float64)
+    ranks = np.empty(n, dtype=np.float64)
+    order = np.argsort(vals, kind="stable")
+    ranks[order] = np.arange(n, dtype=np.float64)
+    uniq, inv = np.unique(vals, return_inverse=True)
+    for u_i in range(uniq.size):
+        idx = np.where(inv == u_i)[0]
+        if idx.size > 1:
+            ranks[idx] = ranks[idx].mean()
+    return ranks / (n - 1)

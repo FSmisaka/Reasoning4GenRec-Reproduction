@@ -29,7 +29,7 @@ import numpy as np
 from .bleu import DiverBleu
 from .cot_utils import extract_cot, is_recommendation_success
 from .neighbor import build_same_user_mask, topk_neighbors
-from .shaping import lambda_at, shape_rewards
+from .shaping import lambda_at, rank_normalize, shape_rewards
 from .user_store import UserEmbeddingStore
 
 #: 参与比较的 CoT 最少 whitespace token 数(低于此值 td 记 0,
@@ -57,13 +57,44 @@ class InterQueryDiversityAddon:
         log_every: int = 1,
         seed: int = 0,
         device: str = "cpu",
+        success_mode: str = "full",
+        reference_mode: str = "success",
+        bleu_smoothing: str = "none",
+        td_norm: str = "none",
     ):
         """device 仅用于 BxB 邻居矩阵乘, 默认 cpu: reward 在 verl driver
-        进程执行, 默认用 cuda 会在 colocated GPU 上建 context 挤占显存。"""
+        进程执行, 默认用 cuda 会在 colocated GPU 上建 context 挤占显存。
+
+        success_mode: 条件塑形指示 I 的口径("full" 三级全匹配 /
+            "prefix" 首层匹配 / "none" 不设正确性约束)。
+        reference_mode: 邻居 Reference 的来源("success" 仅成功 rollout /
+            "any" 无成功 rollout 时退回任一可解析 CoT)。低成功率阶段
+            (如 Stage 2 起点)默认口径会让 intrinsic 恒 0, 可改用
+            prefix/none + any 提高覆盖。
+        bleu_smoothing: "none"(DIVER 官方) / "method1"(add-1 平滑,
+            5-gram 不再几乎恒为 0, TD 有真实区分度)。
+        td_norm: "none" / "rank"。rank = 把每个 GRPO 组内(仅 I=1 的
+            rollout)的 TD 按秩映射到 [0, 1] 均布后再塑形。TD 的组内
+            绝对差通常极小(~0.01), 直接相加对 GRPO 组内排序几乎无影响;
+            秩归一化保证组内区分度由 λ·σ 直接控制(均值固定, 无常数平移)。
+        """
         self.store = UserEmbeddingStore(user_embedding_path)
         self.top_k = int(top_k_neighbors)
         self.same_user_jaccard = float(same_user_jaccard)
-        self.bleu = DiverBleu(div_len=int(bleu_div_len))
+        self.bleu = DiverBleu(div_len=int(bleu_div_len), smoothing=bleu_smoothing)
+        self.success_mode = str(success_mode)
+        if self.success_mode not in ("full", "prefix", "none"):
+            raise ValueError(
+                f"未知 success_mode: {success_mode!r}(full | prefix | none)"
+            )
+        self.reference_mode = str(reference_mode)
+        if self.reference_mode not in ("success", "any"):
+            raise ValueError(
+                f"未知 reference_mode: {reference_mode!r}(success | any)"
+            )
+        self.td_norm = str(td_norm)
+        if self.td_norm not in ("none", "rank"):
+            raise ValueError(f"未知 td_norm: {td_norm!r}(none | rank)")
         self.lambda_init = float(lambda_init)
         self.lambda_final = float(lambda_final)
         self.decay_steps = int(decay_steps)
@@ -130,6 +161,8 @@ class InterQueryDiversityAddon:
                 "success": 0,
                 "td": 0.0,
                 "intrinsic": 0.0,
+                "n_refs": 0,     # 该 query 实际可用的邻居 Reference 数 K_q
+                "cot_ok": 0,     # 本 rollout 的 CoT 是否可解析(</think> 且 >=5 token)
             }
             for i in range(n)
         ]
@@ -176,22 +209,36 @@ class InterQueryDiversityAddon:
             for r in groups[key]:
                 row = rows[r]
                 ok = is_recommendation_success(
-                    row["solution_str"], row["ground_truth"]
+                    row["solution_str"],
+                    row["ground_truth"],
+                    mode=self.success_mode,
                 )
                 results[r]["success"] = int(ok)
                 success_flags[r] = ok
                 cots[r] = extract_cot(row["solution_str"])
+                results[r]["cot_ok"] = int(
+                    cots[r] is not None
+                    and len(cots[r].split()) >= _MIN_COT_TOKENS
+                )
 
         def pick_reference(row_ids: list):
-            """从某 query 的 rollouts 里随机挑一个成功 CoT; 无则 None。"""
-            winners = [
+            """从某 query 的 rollouts 里挑一个参考 CoT。
+
+            reference_mode=success: 只挑"推荐成功"的 CoT;
+            reference_mode=any: 优先成功 CoT, 没有则任意可解析 CoT。
+            """
+            usable = [
                 cots[r]
                 for r in row_ids
-                if success_flags[r]
-                and cots[r] is not None
-                and len(cots[r].split()) >= _MIN_COT_TOKENS
+                if cots[r] is not None and len(cots[r].split()) >= _MIN_COT_TOKENS
             ]
-            return self.rng.choice(winners) if winners else None
+            winners = [cots[r] for r in row_ids if success_flags[r]
+                       and cots[r] is not None
+                       and len(cots[r].split()) >= _MIN_COT_TOKENS]
+            pool = winners if winners else (
+                usable if self.reference_mode == "any" else []
+            )
+            return self.rng.choice(pool) if pool else None
 
         references = {
             q_i: pick_reference(groups[key]) for q_i, key in enumerate(train_keys)
@@ -212,6 +259,8 @@ class InterQueryDiversityAddon:
                 if ref is not None:
                     valid_refs.append(ref)
             valid_neighbor_counts.append(len(valid_refs))
+            for r in groups[train_keys[q_i]]:
+                results[r]["n_refs"] = len(valid_refs)
             if not valid_refs:
                 continue
             for r in groups[train_keys[q_i]]:
@@ -224,6 +273,27 @@ class InterQueryDiversityAddon:
                     )
                 )
                 td_values[r] = d
+
+        # 保留原始 TD 供回报/诊断(intrinsic 用可能归一化后的值)
+        td_raw = td_values.copy()
+
+        # ---- 可选: 组内秩归一化(仅重排"可塑形"的 rollout, 保证 GRPO 组内
+        # 区分度; 均值固定为 0.5 分布, 不引入组内常数平移) ----
+        if self.td_norm == "rank":
+            for key in train_keys:
+                rows_q = groups[key]
+                eligible = [
+                    r for r in rows_q
+                    if success_flags[r] and results[r].get("cot_ok", 0)
+                ]
+                m = len(eligible)
+                if m < 2:
+                    for r in eligible:
+                        td_values[r] = 0.0
+                    continue
+                vals = [td_values[r] for r in eligible]
+                for r, v in zip(eligible, rank_normalize(vals)):
+                    td_values[r] = float(v)
 
         # ---- 塑形(只作用于本 batch 的 train 行) ----
         train_rows = [r for key in train_keys for r in groups[key]]
@@ -246,7 +316,8 @@ class InterQueryDiversityAddon:
             lam=lam,
         )
         for j, r in enumerate(train_rows):
-            results[r]["td"] = float(td_arr[j])
+            results[r]["td"] = float(td_raw[train_rows][j])       # 原始 TD(诊断)
+            results[r]["td_used"] = float(td_arr[j])              # 塑形实际用值
             results[r]["intrinsic"] = float(intrinsic[j])
             results[r]["score"] = float(augmented[j])
 
@@ -258,7 +329,7 @@ class InterQueryDiversityAddon:
             n_rollouts=len(train_rows),
             base_rewards=base_arr,
             success_arr=success_arr,
-            td_arr=td_arr,
+            td_arr=td_raw[train_rows],
             intrinsic=intrinsic,
             augmented=augmented,
             neighbor_sim_mean=float(np.nanmean(sims_finite)) if sims_finite.size else 0.0,
@@ -279,6 +350,10 @@ class InterQueryDiversityAddon:
             "lambda": m["lam"],
             "n_queries": m["n_queries"],
             "n_rollouts": m["n_rollouts"],
+            "success_mode": self.success_mode,
+            "reference_mode": self.reference_mode,
+            "bleu_smoothing": self.bleu.smoothing,
+            "td_norm": self.td_norm,
             "base_reward_mean": float(np.mean(m["base_rewards"])),
             "augmented_reward_mean": float(np.mean(m["augmented"])),
             "success_rate": float(np.mean(success)) if len(success) else 0.0,

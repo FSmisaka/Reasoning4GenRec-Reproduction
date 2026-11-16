@@ -5,14 +5,20 @@ SIDReasoner 的 assistant 输出格式(src/data/sidreasoner_data.py:1539)::
     <think>\\n{reasoning}\\n</think>\\n\\n<a_x><b_y><c_z>
 
 - CoT = ``<think>`` 与 ``</think>`` 之间的文本(不含最终 SID 答案);
-- "推荐成功"(多样性奖励的条件指示函数 I_{q,i})= 采样出的 SID 三元组
-  与 ground truth **三级全匹配**。注意不能把原始 reward > 0 当作成功:
-  StepRule 的格式分(0.1)可在零匹配时给出正奖励。
+- "推荐成功"指示函数 I_{q,i} 支持三档口径(success_mode):
+    - ``full``(默认): SID 三元组与 ground truth **三级全匹配**;
+    - ``prefix``: 至少第 1 层 code 匹配(前缀连续匹配 >=1 层), 大幅提高
+      低成功率阶段的覆盖率;
+    - ``none``: 不做推荐成功约束(所有 rollout 参与多样性奖励)。
+  注意不能把原始 reward > 0 当作成功: StepRule 的格式分(0.1)可在零匹配
+  时给出正奖励。
 """
 
 import re
 
 _THINK_OPEN_RE = re.compile(r"<think>")
+
+SUCCESS_MODES = ("full", "prefix", "none")
 
 
 def extract_cot(response_str: str) -> str | None:
@@ -32,24 +38,55 @@ def extract_cot(response_str: str) -> str | None:
     return response_str[start:close].strip()
 
 
-def is_recommendation_success(
+def recommendation_prefix_len(
     solution_str: str, ground_truth, extract_solution_fn=None, num_sid: int = 3
-) -> bool:
-    """采样答案与 ground truth 三级 SID 全匹配才算推荐成功。
-
-    Args:
-        extract_solution_fn: 复用 src/reward/sid_rewards/base.py 的
-            extract_solution(默认延迟导入), 保证与各 reward 变体的
-            解析口径一致(只看响应尾部 50 字符)。
-    """
+) -> int:
+    """采样答案与 ground truth 沿 SID 层级的连续前缀匹配长度(0..num_sid)。"""
     if extract_solution_fn is None:
         from src.reward.sid_rewards.base import extract_solution as extract_solution_fn
 
     answer = extract_solution_fn(solution_str, num_sid=num_sid)
     if answer is None or not ground_truth:
-        return False
+        return 0
 
     from src.reward.sid_rewards.base import extract_sid_tokens
 
     gt = extract_sid_tokens(str(ground_truth))[:num_sid]
-    return len(gt) == num_sid and answer == gt
+    if len(gt) != num_sid:
+        return 0
+    matched = 0
+    for pred, gold in zip(answer, gt):
+        if pred != gold:
+            break
+        matched += 1
+    return matched
+
+
+def is_recommendation_success(
+    solution_str: str,
+    ground_truth,
+    extract_solution_fn=None,
+    num_sid: int = 3,
+    mode: str = "full",
+) -> bool:
+    """推荐成功指示 I(mode: full | prefix | none)。
+
+    Args:
+        extract_solution_fn: 复用 src/reward/sid_rewards/base.py 的
+            extract_solution(默认延迟导入), 保证与各 reward 变体的
+            解析口径一致(只看响应尾部 50 字符)。
+        mode: "full"=三级全匹配(默认, 严格); "prefix"=第 1 层匹配即可;
+            "none"=恒为 True(仅要求答案可解析, 见下)。
+    """
+    if mode not in SUCCESS_MODES:
+        raise ValueError(f"未知 success mode: {mode!r}, 可选 {SUCCESS_MODES}")
+    if mode == "none":
+        # 不做正确性约束, 但仍要求答案可解析(格式坏/截断的 rollout 不参与)
+        if extract_solution_fn is None:
+            from src.reward.sid_rewards.base import extract_solution as extract_solution_fn
+
+        return extract_solution_fn(solution_str, num_sid=num_sid) is not None
+    matched = recommendation_prefix_len(
+        solution_str, ground_truth, extract_solution_fn=extract_solution_fn, num_sid=num_sid
+    )
+    return matched >= (num_sid if mode == "full" else 1)

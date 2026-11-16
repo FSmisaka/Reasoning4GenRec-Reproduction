@@ -211,6 +211,22 @@ CONFIG: Dict[str, Any] = {
             "sigma": 0.5,                   # intrinsic 裁剪上界
             "bleu_div_len": 1000,           # DIVER BLEU 参与比较的 CoT 前缀字符数
             "seed": 0,                      # reference CoT 随机选择的 RNG 种子
+            # ---- 低成功率阶段的 reward 设计开关(默认 = DIVER 严格口径) ----
+            # success_mode: 条件塑形指示 I 的口径。Stage 2 起点三级全匹配
+            #   成功率 ~1%, "full" 会让 intrinsic 几乎恒 0; 可选:
+            #   full(三级全匹配)| prefix(首层 code 匹配)| none(不做正确性约束)
+            "success_mode": "full",
+            # reference_mode: 邻居 Reference 来源。success=仅成功 rollout;
+            #   any=无成功 rollout 时退回任一可解析 CoT(低成功率下保证 TD 可算)
+            "reference_mode": "success",
+            # bleu_smoothing: none(DIVER 官方无平滑, 自然语言 CoT 上 BLEU
+            #   常为 0 -> TD 饱和到 1)| method1(nltk add-1 平滑, 有真实区分度)
+            "bleu_smoothing": "none",
+            # td_norm: none | rank。TD 的组内绝对差通常只有 ~0.01, 直接相加
+            #   对 GRPO 组内排序几乎无影响; rank 把每组的 TD 按秩映射到
+            #   [0,1] 均布(仅 I=1 的 rollout 参与), 组内区分度由 λ·σ 直接
+            #   控制。rank 模式下建议 sigma=1.0(否则一半排序被裁剪)。
+            "td_norm": "none",
             "metrics_path": None,          # 默认 embedding 同目录 interdiv_metrics.jsonl
             "log_every": 1,                 # 摘要打印间隔(batch)
             # ---- 以下仅离线提取脚本使用 ----

@@ -141,7 +141,7 @@ esac
 INTERDIV_FLAGS=""
 if [[ "${INTER_DIV}" == "True" ]]; then
   read -r IQD_ENC IQD_PATH IQD_K IQD_JAC IQD_LI IQD_LF IQD_DS IQD_GAMMA \
-        IQD_SIGMA IQD_DIVLEN IQD_SEED IQD_METRICS \
+        IQD_SIGMA IQD_DIVLEN IQD_SEED IQD_METRICS IQD_SUCCESS IQD_REF IQD_SMOOTH IQD_TDNORM \
         < <(${PY} - <<'EOF'
 from config import load_config
 import os
@@ -153,9 +153,13 @@ print(enc, path, iqd.get("top_k_neighbors", 8), iqd.get("same_user_jaccard", 0.8
       iqd.get("lambda_init", 0.2), iqd.get("lambda_final", 0.0),
       iqd.get("decay_steps", 300), iqd.get("gamma", 1.0),
       iqd.get("sigma", 0.5), iqd.get("bleu_div_len", 1000),
-      iqd.get("seed", 0), iqd.get("metrics_path") or "")
+      iqd.get("seed", 0), iqd.get("metrics_path") or "-",
+      iqd.get("success_mode", "full"), iqd.get("reference_mode", "success"),
+      iqd.get("bleu_smoothing", "none"), iqd.get("td_norm", "none"))
 EOF
 )
+  # metrics_path 用 "-" 占位避免空字段导致 read 变量错位
+  [[ "${IQD_METRICS}" == "-" ]] && IQD_METRICS=""
   if [[ ! -f "${IQD_PATH}" ]]; then
     echo "错误: 未找到 User Embedding 缓存 ${IQD_PATH}。" >&2
     echo "      先运行: DATASET=${DATASET} make ${DATASET}-sidreasoner-user-embed" >&2
@@ -184,6 +188,10 @@ EOF
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.sigma=${IQD_SIGMA}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.bleu_div_len=${IQD_DIVLEN}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.seed=${IQD_SEED}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.success_mode=${IQD_SUCCESS}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.reference_mode=${IQD_REF}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.bleu_smoothing=${IQD_SMOOTH}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.td_norm=${IQD_TDNORM}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.model_path=$(pwd)/${STAGE2_CKPT}"
   if [[ -n "${IQD_METRICS}" ]]; then
     INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.metrics_path=$(pwd)/${IQD_METRICS}"

@@ -54,15 +54,27 @@ class DiverBleu:
     Args:
         weights: n-gram 几何平均权重(默认 DIVER 官方 5-gram 权重)。
         div_len: 参与比较的文本前缀字符数(默认 1000, 官方默认)。
+        smoothing: "none"(默认, DIVER 官方口径, 任一阶零匹配 -> BLEU=0)
+            | "method1"(nltk SmoothingFunction().method1 的 add-1 平滑:
+            p_n = (匹配数+1)/(总数+1), 低阶共享词即可产生区分度, 避免
+            5-gram 无平滑在自然语言 CoT 上几乎恒为 0、TD 饱和到 1)。
     """
 
-    def __init__(self, weights=DIVER_BLEU_WEIGHTS, div_len: int = DIVER_DIV_LEN):
+    def __init__(
+        self,
+        weights=DIVER_BLEU_WEIGHTS,
+        div_len: int = DIVER_DIV_LEN,
+        smoothing: str = "none",
+    ):
         w = tuple(float(x) for x in weights)
         if len(w) < 1:
             raise ValueError("weights 不能为空。")
+        if smoothing not in ("none", "method1"):
+            raise ValueError(f"未知 smoothing: {smoothing!r}(none | method1)")
         self.weights = w
         self.max_order = len(w)
         self.div_len = int(div_len)
+        self.smoothing = smoothing
 
     # ------------------------------------------------------------------ #
     # 缓存(有界 lru: 每个 step 的 rollout 文本数 ~B*G, 4096 上限足够
@@ -104,9 +116,13 @@ class DiverBleu:
                 for g in cand_ngrams
                 if g in ref_ngrams
             )
-            if matches <= 0:
-                return 0.0  # 无平滑: 任一阶零精度 -> BLEU=0
-            log_sum += w * math.log(matches / total)
+            if self.smoothing == "method1":
+                # nltk SmoothingFunction().method1: add-1 平滑
+                log_sum += w * math.log((matches + 1.0) / (total + 1.0))
+            else:
+                if matches <= 0:
+                    return 0.0  # 无平滑: 任一阶零精度 -> BLEU=0
+                log_sum += w * math.log(matches / total)
 
         # brevity penalty(nltk 同式)
         if cand.length > ref.length:
