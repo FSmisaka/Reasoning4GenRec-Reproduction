@@ -14,8 +14,12 @@ results/sidreasoner/ 下的产物统一组织为::
     think_steprule          原始 SIDReasoner(StepRule reward)思考模式
     think_rolloutbeam       Rollout-Beam reward(OneRec-Think)思考模式
     think_rolloutbeam_div   Rollout-Beam x OneReason R_div 思考模式
-    think_bleu              跨 Query CoT 多样性(BLEU)思考模式
-    think_ngram             跨 Query CoT 多样性(n-gram Jaccard)思考模式
+    think_bleu              跨 Query CoT 多样性(BLEU, 旧命名)思考模式
+    think_ngram             跨 Query CoT 多样性(n-gram, 旧命名)思考模式
+    think_steprule_bleu     StepRule x BLEU 多样性思考模式
+    think_steprule_ngram    StepRule x n-gram 多样性思考模式
+    think_rolloutbeam_bleu  Rollout-Beam x BLEU 多样性思考模式
+    think_rolloutbeam_ngram Rollout-Beam x n-gram 多样性思考模式
     think_steprule_temp     原始 SIDReasoner 思考模式 + 采样温度(temperature > 0)
 
     泛化规则(按需自动创建, 不在固定清单内):
@@ -79,21 +83,28 @@ def variant_of_model(model) -> str:
     -> "sft" / "sft_gem"(GEM 损失变体);
 
     Stage 3 RL(checkpoints/RecRL_Reasoning/
-    <C>_stage3_rl_Qwen3-1.7B[_own][_rolloutbeam[_div]|_bleu|_ngram])
-    -> "steprule" / "rolloutbeam" / "rolloutbeam_div" / "bleu" / "ngram"。
+    <C>_stage3_rl_Qwen3-1.7B[_own][_<corr>][_<div>]) ->
+    "<corr>" / "<div>" / "<corr>_<div>":
+      corr = steprule(默认, 无后缀) | rolloutbeam | rolloutbeam_div
+      div  = bleu | ngram
+    例: ..._steprule_bleu -> "steprule_bleu"(think 目录
+    think_steprule_bleu/, 多样性分析镜像 results/diversity/.../think_steprule_bleu/)。
+    旧后缀 _bleu / _ngram(不带 corr)仍按 "bleu" / "ngram" 识别。
     """
     path = str(model or "")
     if re.search(r"stage[12]_(sft|activation)", path):
         return "sft_gem" if "_gem" in path else "sft"
     if "_rolloutbeam_div" in path:
-        return "rolloutbeam_div"
-    if "_rolloutbeam" in path:
-        return "rolloutbeam"
-    if "_ngram" in path:
-        return "ngram"
-    if "_bleu" in path:
-        return "bleu"
-    return "steprule"
+        corr = "rolloutbeam_div"
+    elif "_rolloutbeam" in path:
+        corr = "rolloutbeam"
+    elif "_steprule" in path:
+        corr = "steprule"
+    else:
+        corr = None
+    div = "ngram" if "_ngram" in path else ("bleu" if "_bleu" in path else None)
+    variant = "_".join(x for x in (corr, div) if x)
+    return variant or "steprule"
 
 
 def result_dir(category, kind, model=None, temperature=0.0, max_len=None) -> str:

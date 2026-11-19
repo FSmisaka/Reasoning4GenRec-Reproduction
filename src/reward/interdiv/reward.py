@@ -64,6 +64,7 @@ class InterQueryDiversityAddon:
         td_norm: str = "none",
         similarity: str = "bleu",
         ngram_n: int = 1,
+        combine: str = "add",
     ):
         """device 仅用于 BxB 邻居矩阵乘, 默认 cpu: reward 在 verl driver
         进程执行, 默认用 cuda 会在 colocated GPU 上建 context 挤占显存。
@@ -84,6 +85,8 @@ class InterQueryDiversityAddon:
             bleu_smoothing 选项); "ngram_jaccard" = 1 - n-gram 集合
             Jaccard(|G_n(a)∩G_n(b)| / |G_n(a)∪G_n(b)|)。
         ngram_n: ngram_jaccard 的 n(默认 1)。
+        combine: 正确性 x 多样性合并方式("add" 加法塑形 / "mul" 乘法:
+            R' = R * (1 + intrinsic))。
         """
         self.store = UserEmbeddingStore(user_embedding_path)
         self.top_k = int(top_k_neighbors)
@@ -116,6 +119,9 @@ class InterQueryDiversityAddon:
         self.td_norm = str(td_norm)
         if self.td_norm not in ("none", "rank"):
             raise ValueError(f"未知 td_norm: {td_norm!r}(none | rank)")
+        self.combine = str(combine)
+        if self.combine not in ("add", "mul"):
+            raise ValueError(f"未知 combine: {combine!r}(add | mul)")
         self.lambda_init = float(lambda_init)
         self.lambda_final = float(lambda_final)
         self.decay_steps = int(decay_steps)
@@ -348,6 +354,7 @@ class InterQueryDiversityAddon:
             gamma=self.gamma,
             sigma=self.sigma,
             lam=lam,
+            combine=self.combine,
         )
         for j, r in enumerate(train_rows):
             results[r]["td"] = float(td_raw[train_rows][j])       # 原始 TD(诊断)
@@ -402,6 +409,7 @@ class InterQueryDiversityAddon:
             "bleu_smoothing": getattr(self.scorer, "smoothing", None),
             "ngram_n": getattr(self.scorer, "n", None),
             "td_norm": self.td_norm,
+            "combine": self.combine,
             # ---- reward 组成三统计(mean/max/min), 命名对齐 verl critic/* ----
             "critic/correctness_rewards/mean": base_mms["mean"],
             "critic/correctness_rewards/max": base_mms["max"],

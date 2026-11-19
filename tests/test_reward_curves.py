@@ -58,7 +58,7 @@ def fake_logs(tmp_path):
         return rec
 
     _write_jsonl(
-        logs / "Video_Games_stage3_rl_Qwen3-1.7B_ngram_interdiv_metrics.jsonl",
+        logs / "Video_Games_stage3_rl_Qwen3-1.7B_steprule_ngram_interdiv_metrics.jsonl",
         [row(s, 0.1 + 0.01 * s, 1.1, 0.0, True) for s in (1, 2, 3, 4, 5)],
     )
     # 旧字段文件 + 带 _own SID 后缀的文件(验证通配)
@@ -70,8 +70,8 @@ def fake_logs(tmp_path):
 
 
 def test_resolve_metrics_path_suffix_and_own(fake_logs):
-    got = resolve_metrics_path("Video_Games", "_ngram", str(fake_logs))
-    assert got and got.endswith("Qwen3-1.7B_ngram_interdiv_metrics.jsonl")
+    got = resolve_metrics_path("Video_Games", "_steprule_ngram", str(fake_logs))
+    assert got and got.endswith("Qwen3-1.7B_steprule_ngram_interdiv_metrics.jsonl")
     assert resolve_metrics_path("Video_Games", "_nope", str(fake_logs)) is None
 
 
@@ -84,7 +84,7 @@ def test_load_metrics_sorts_and_skips_bad_lines(fake_logs):
 
 def test_series_points_new_keys_and_legacy_alias(fake_logs):
     ngram = load_metrics(str(
-        fake_logs / "Video_Games_stage3_rl_Qwen3-1.7B_ngram_interdiv_metrics.jsonl"
+        fake_logs / "Video_Games_stage3_rl_Qwen3-1.7B_steprule_ngram_interdiv_metrics.jsonl"
     ))
     pts = series_points(ngram, "critic/correctness_rewards/max")
     assert [v for _, v in pts] == [1.1] * 5
@@ -111,11 +111,11 @@ def test_plot_reward_curves_end_to_end(fake_logs, tmp_path, monkeypatch):
     monkeypatch.setenv("DATASET", "games")
     out = tmp_path / "rewards.png"
     series = [
-        {"label": "Correctness (n-gram)", "exp": "_ngram",
+        {"label": "Correctness (n-gram)", "exp": "_steprule_ngram",
          "key": "critic/correctness_rewards/mean"},
-        {"label": "Diversity (n-gram)", "exp": "_ngram",
+        {"label": "Diversity (n-gram)", "exp": "_steprule_ngram",
          "key": "critic/diversity_rewards/mean"},
-        {"label": "Total (n-gram)", "exp": "_ngram",
+        {"label": "Total (n-gram)", "exp": "_steprule_ngram",
          "key": "critic/total_rewards/mean"},
         # 旧字段 JSONL: 走别名回退
         {"label": "Correctness (BLEU, legacy)", "exp": "_bleu",

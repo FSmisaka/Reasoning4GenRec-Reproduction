@@ -234,6 +234,10 @@ CONFIG: Dict[str, Any] = {
             #   INTER_DIV_METRIC=ngram 会强制覆盖为 ngram_jaccard。
             "similarity": "bleu",
             "ngram_n": 2,                   # ngram_jaccard 的 n 阶数
+            # combine: 正确性 x 多样性合并方式。add = R + intrinsic(DIVER
+            #   塑形); mul = R * (1 + intrinsic)(多样性按比例放大正确性
+            #   reward, R=0 不获得加成)。CORR/DIV/COMBINE 环境变量可覆盖。
+            "combine": "add",
             "metrics_path": None,          # 默认 embedding 同目录 interdiv_metrics.jsonl
             "log_every": 1,                 # 摘要打印间隔(batch)
             # ---- 以下仅离线提取脚本使用 ----

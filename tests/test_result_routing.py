@@ -49,6 +49,12 @@ def test_variant_of_model():
     assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_own_bleu/global_step_100/actor_merged") == "bleu"
     assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_ngram/global_step_100/actor_merged") == "ngram"
     assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_own_ngram/global_step_100/actor_merged") == "ngram"
+    # 新命名: _<corr>_<div>
+    assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_steprule_bleu/global_step_100/actor_merged") == "steprule_bleu"
+    assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_steprule_ngram/global_step_100/actor_merged") == "steprule_ngram"
+    assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam_bleu/global_step_100/actor_merged") == "rolloutbeam_bleu"
+    assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_own_rolloutbeam_ngram/global_step_100/actor_merged") == "rolloutbeam_ngram"
+    assert variant_of_model(".../Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam_div_ngram/global_step_100/actor_merged") == "rolloutbeam_div_ngram"
 
 
 def test_variant_of_model_sft():

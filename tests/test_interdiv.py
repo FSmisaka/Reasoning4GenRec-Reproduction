@@ -411,6 +411,31 @@ def test_shape_gamma_one_ignores_tokens():
     assert intrinsic[0] == pytest.approx(0.7)
 
 
+def test_shape_combine_add_and_mul():
+    base = np.array([1.0, 0.5, 0.0])
+    success = np.array([True, True, True])
+    td = np.array([0.5, 0.5, 0.5])
+    # add: R' = R + λ·I·clip(·)(R=0 也拿满加成)
+    intr, aug = shape_rewards(base, success, td, lam=0.4, sigma=1.0, combine="add")
+    assert aug == pytest.approx([1.2, 0.7, 0.2])
+    # mul: R' = R * (1 + intrinsic)(R=0 不获得加成)
+    intr2, aug2 = shape_rewards(base, success, td, lam=0.4, sigma=1.0, combine="mul")
+    assert intr2 == pytest.approx(intr)
+    assert aug2 == pytest.approx([1.2, 0.6, 0.0])
+    with pytest.raises(ValueError):
+        shape_rewards(base, success, td, lam=0.4, sigma=1.0, combine="bogus")
+
+
+def test_addon_rejects_unknown_combine(addon):
+    ad, _, _ = addon(n_queries=2, rollout_n=2)
+    with pytest.raises(ValueError):
+        InterQueryDiversityAddon(
+            user_embedding_path=ad.store.path,
+            metrics_path=ad.metrics_path + ".comb",
+            combine="bogus",
+        )
+
+
 def test_shape_zero_td_when_no_neighbors():
     base = np.array([1.0])
     success = np.array([True])
@@ -855,6 +880,39 @@ def test_entry_enabled_matches_addon(tmp_path, tmp_store):
     assert any(r["intrinsic"] > 0 for r in out if r["success"])
     for r in out:
         assert r["score"] == pytest.approx(r["base_reward"] + r["intrinsic"])
+
+
+def test_entry_correctness_type_alias_and_combine(tmp_path, tmp_store):
+    """correctness_reward_type(新) / base_reward_type(旧别名) 等价; combine 透传。"""
+    os.environ.setdefault("DATASET", "games")
+    if not os.path.exists(INFO_FILE):
+        pytest.skip("缺少 info 文件, 跳过")
+    path, _, _ = tmp_store(n=3, dim=4)
+    rows = _make_batch([("train", i, f"e{i}") for i in range(3)])
+    common = dict(
+        data_sources=[r["data_source"] for r in rows],
+        solution_strs=[r["solution_str"] for r in rows],
+        ground_truths=[r["ground_truth"] for r in rows],
+        extra_infos=[r["extra_info"] for r in rows],
+        enable_inter_query_diversity=True,
+        user_embedding_path=str(path),
+        metrics_path=str(tmp_path / "alias_metrics.jsonl"),
+        lambda_init=0.3,
+        sigma=1.0,
+        top_k_neighbors=2,
+        combine="mul",
+    )
+    mod = _load_entry()
+    out_new = mod.rule_base_reward(correctness_reward_type="steprule", **common)
+    mod._ADDON = None  # 重建 addon, 避免 lambda 随内部 step 衰减引入差异
+    out_old = mod.rule_base_reward(base_reward_type="steprule", **common)
+    # 两种命名构建的是同一 base computer, 输出逐值一致
+    assert [r["score"] for r in out_new] == pytest.approx([r["score"] for r in out_old])
+    # mul: score = base * (1 + intrinsic)
+    for r in out_new:
+        assert r["score"] == pytest.approx(
+            r["base_reward"] * (1 + r["intrinsic"]), abs=1e-9
+        )
 
 
 def test_entry_enabled_requires_embedding_path():

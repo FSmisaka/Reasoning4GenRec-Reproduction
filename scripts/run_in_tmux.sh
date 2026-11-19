@@ -53,6 +53,7 @@ fi
 cmd="env"
 for v in CUDA_VISIBLE_DEVICES CUDA_LIST NGPUS_WANT MASTER_PORT DATASET VERL_HOME \
          PY MODEL RESULT CKPT_ROOT EVAL_INTERVAL SID FORCE \
+         REWARD INTER_DIV INTER_DIV_METRIC CORR DIV COMBINE \
          USE_MEGATRON USE_SGLANG PIP_INDEX_URL; do
     if [[ -n "${!v:-}" ]]; then
         cmd+=" ${v}=$(printf %q "${!v}")"

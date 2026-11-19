@@ -61,17 +61,18 @@ KEY_ALIASES = {
 # 曲线注册表: 加新折线只需在此追加一行(label=图例, exp=实验名后缀,
 # key=JSONL 统计键); 也可在调用 plot_reward_curves(series=...) 时整体替换。
 # exp 会被拼进 logs/<C>_stage3_rl_Qwen3-1.7B*{exp}_interdiv_metrics.jsonl
+# (实验后缀 = _<corr>_<div>, 如 _steprule_ngram / _rolloutbeam_bleu)
 # 通配(兼容 _own 等 SID 后缀); 多个匹配取最新修改的文件。
 DEFAULT_SERIES = [
-    {"label": "Correctness (n-gram)", "exp": "_ngram",
+    {"label": "Correctness (StepRule x n-gram)", "exp": "_steprule_ngram",
      "key": "critic/correctness_rewards/mean", "color": C_BLUE, "ls": "-", "marker": "o"},
-    {"label": "Diversity (n-gram)", "exp": "_ngram",
+    {"label": "Diversity (StepRule x n-gram)", "exp": "_steprule_ngram",
      "key": "critic/diversity_rewards/mean", "color": C_RED, "ls": "--", "marker": "s"},
-    {"label": "Total (n-gram)", "exp": "_ngram",
+    {"label": "Total (StepRule x n-gram)", "exp": "_steprule_ngram",
      "key": "critic/total_rewards/mean", "color": C_GRAY, "ls": "-.", "marker": "^"},
-    {"label": "Correctness (BLEU)", "exp": "_bleu",
+    {"label": "Correctness (Beam x n-gram)", "exp": "_rolloutbeam_ngram",
      "key": "critic/correctness_rewards/mean", "color": C_BLUE, "ls": ":", "marker": "v"},
-    {"label": "Diversity (BLEU)", "exp": "_bleu",
+    {"label": "Diversity (Beam x n-gram)", "exp": "_rolloutbeam_ngram",
      "key": "critic/diversity_rewards/mean", "color": C_RED, "ls": ":", "marker": "D"},
 ]
 

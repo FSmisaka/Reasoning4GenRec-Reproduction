@@ -54,8 +54,12 @@ make games-sidreasoner-rl              # Stage 3: GRPO 强化学习(前置见下
 make games-sidreasoner-rl-beam         # Stage 3 变体: OneRec-Think Rollout-Beam reward(见下)
 make games-sidreasoner-rl-beam-div     # Stage 3 变体: Rollout-Beam x OneReason R_div(见下)
 make games-sidreasoner-user-embed      # 跨 Query 多样性奖励的离线 User Embedding(一次性)
-make games-sidreasoner-rl-bleu         # Stage 3 变体: 跨 Query CoT 多样性(BLEU 度量, 见下)
-make games-sidreasoner-rl-ngram        # Stage 3 变体: 同上, 多样性度量换成 n-gram Jaccard
+make games-sidreasoner-rl-bleu         # StepRule + BLEU 多样性(加法合并)
+make games-sidreasoner-rl-ngram        # StepRule + n-gram 多样性(加法合并)
+make games-sidreasoner-rl-beam-bleu    # Rollout-Beam + BLEU 多样性(加法合并)
+make games-sidreasoner-rl-beam-ngram   # Rollout-Beam + n-gram 多样性(加法合并)
+# 通用入口(CORR=steprule|beam|beam-div, DIV=bleu|ngram|none, COMBINE=add|mul):
+#   make games-sidreasoner-rl-div CORR=beam DIV=ngram COMBINE=mul
 
 # 挂 tmux 跑:
 make tmux TARGET=games-sidreasoner-sft SESSION=sft-games
@@ -75,8 +79,10 @@ tmux kill-session -t sft               # 3. 清理会话
 make games-sidreasoner-merge
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_div
-make games-sidreasoner-merge RL_SUFFIX=_bleu
-make games-sidreasoner-merge RL_SUFFIX=_ngram
+make games-sidreasoner-merge RL_SUFFIX=_steprule_bleu
+make games-sidreasoner-merge RL_SUFFIX=_steprule_ngram
+make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_bleu
+make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_ngram
 
 # 4) 思考模式评估 & 计算指标 & 画图
 make games-sidreasoner-think \
@@ -167,9 +173,9 @@ make games-sidreasoner-think MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage
   等三条 grep 有输出即就绪, 普通 Stage 3 不受影响。
 - beam 参数: `rl.sid_beam_size`(K, >1)/ `sid_length`(L); beam-div 另有
   `reward_kwargs.div_level`(默认 1 = 首层); beam 集中导致 R_div 全零时增大 K。
-- bleu/ngram 变体参数: `rl.inter_query_diversity`(K 邻居/lambda 衰减/gamma/
-  sigma/度量与门控开关等), 详见 `docs/sidreasoner_inter_query_diversity.md`;
-  默认关闭, 不影响其他 target。
+- 多样性变体: 正确性 reward(StepRule / Rollout-Beam)与多样性 reward(BLEU /
+  n-gram)解耦, 通过 `COMBINE=add|mul` 合并; 参数在 `rl.inter_query_diversity`,
+  详见 `docs/sidreasoner_inter_query_diversity.md`; 默认关闭, 不影响其他 target。
 - 自定义奖励: 继承 `BaseSidReward` 注册到 `src/reward/sid_rewards/`(见
   `tests/test_sid_rewards.py`), `reward_kwargs.reward_type` 显式指定即可,
   无需改 trainer。单测: `.venv/bin/python -m pytest tests/ -v`。

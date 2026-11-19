@@ -376,7 +376,8 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             "runs", "sidreasoner", "user_embed", f"{category}_{enc}.npz"
         )
         kwargs = {
-            "base_reward_type": "steprule",
+            "correctness_reward_type": "steprule",
+            "combine": iqd.get("combine", "add"),
             "enable_inter_query_diversity": True,
             "user_embedding_path": emb,
             "top_k_neighbors": iqd.get("top_k_neighbors", 8),

@@ -42,9 +42,25 @@ def _bool(x, default=False):
     return str(x).lower() in ("1", "true", "yes", "on")
 
 
+def _correctness_reward_type(kwargs: dict) -> str:
+    """正确性 reward 类型: correctness_reward_type(新名) 优先,
+    base_reward_type(旧名) 兼容。"""
+    return str(
+        kwargs.get("correctness_reward_type")
+        or kwargs.get("base_reward_type")
+        or "steprule"
+    ).lower()
+
+
 def _build_base_computer(kwargs: dict):
-    """按 base_reward_type 复用原有 reward 实现(逐行, 不改动)。"""
-    base_type = str(kwargs.get("base_reward_type", "steprule")).lower()
+    """按正确性 reward 类型复用原有实现(逐行, 不改动)。
+
+    可选值: steprule(SIDReasoner 论文原版)| onerec_rollout_beam
+    (OneRec-Think)| onereason_div_rollout_beam(Rollout-Beam x R_div)|
+    sid_rewards 注册表中的其他变体 —— 新正确性 reward 注册进
+    src/reward/sid_rewards/ 即可, 无需改本入口。
+    """
+    base_type = _correctness_reward_type(kwargs)
     if base_type == "steprule":
         from src.reward.direct_recommendation_steprule import MyRewardComputer
 
@@ -67,7 +83,7 @@ def _build_base_computer(kwargs: dict):
 
 def _get_base_computer(kwargs: dict):
     global _BASE_COMPUTER, _BASE_KEY
-    key = str(kwargs.get("base_reward_type", "steprule")).lower()
+    key = _correctness_reward_type(kwargs)
     if _BASE_COMPUTER is None or _BASE_KEY != key:
         _BASE_COMPUTER = _build_base_computer(kwargs)
         _BASE_KEY = key
@@ -105,6 +121,7 @@ def _get_addon(kwargs: dict):
             td_norm=str(kwargs.get("td_norm", "none")),
             similarity=str(kwargs.get("similarity", "bleu")),
             ngram_n=int(kwargs.get("ngram_n", 1)),
+            combine=str(kwargs.get("combine", "add")),
         )
     return _ADDON
 

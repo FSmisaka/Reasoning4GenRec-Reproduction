@@ -23,7 +23,11 @@ d(o_{q,i}) = (1 / K_q) * Σ_{q' ∈ N_K^valid(q)} [1 - BLEU_sym(c_{q,i}, c~_{q'}
 R'_{q,i} = R_{q,i} + λ(t) * I_{q,i} * clip( γ^{T_{q,i}} * d(o_{q,i}), 0, σ )
 ```
 
-- `R_{q,i}`:原始推荐 reward(steprule 或 rollout_beam 族),**原样保留**;
+- `R_{q,i}`:正确性 reward(steprule / onerec_rollout_beam /
+  onereason_div_rollout_beam,由 `correctness_reward_type` 选择),
+  **原样保留**;
+- 合并方式 `combine`:`add`(默认, 上式)或 `mul`
+  `R' = R * (1 + intrinsic)`(R=0 的 rollout 不获得多样性加成);
 - `N_K^valid(q)`:in-batch 余弦 top-K 相似用户中,有"推荐成功"rollout 的
   子集;`K_q = |N_K^valid(q)|`,为 0 时 `d = 0`;
 - `c~_{q'}`:邻居 q' 的 G 条 rollout 中随机选一条成功 CoT 作 Reference
@@ -31,15 +35,16 @@ R'_{q,i} = R_{q,i} + λ(t) * I_{q,i} * clip( γ^{T_{q,i}} * d(o_{q,i}), 0, σ )
 - `similarity`(配置)可选 `bleu`(默认, 下式)或 `ngram_jaccard`:
   `sim(a,b) = |G_n(a)∩G_n(b)| / |G_n(a)∪G_n(b)|`(n-gram 集合 Jaccard,
   `ngram_n` 控阶数), `TD = 1 - sim`。`make <ds>-sidreasoner-rl-ngram`
-  即后者, 产物后缀 `_ngram`。
+  即后者。
 - `BLEU_sym(a,b) = (BLEU(ref=a,cand=b) + BLEU(ref=b,cand=a)) / 2`,
   口径与 DIVER 官方 `calculate_belu_matrix` 一致:
   whitespace 分词、截断前 1000 字符、5-gram 权重
   `(0.02, 0.1, 0.15, 0.25, 0.38)`(和 0.9,不归一)、无平滑
   (任一阶零精度 → BLEU=0)。自实现与 nltk `sentence_bleu` 300/300
   随机对逐值一致(见测试);
-- `I_{q,i}` = 采样 SID 三元组与 ground truth **三级全匹配**。
-  **不能**用"原 reward > 0"判断:StepRule 的格式分 0.1 可在零匹配时给正分;
+- `I_{q,i}` 由 `success_mode` 决定: `full`(默认, 三级全匹配)/
+  `prefix`(首层匹配)/ `none`(仅要求答案可解析)。**不能**用
+  "原 reward > 0"判断:StepRule 的格式分 0.1 可在零匹配时给正分;
 - `λ(t)`:线性衰减 `λ_init → λ_final`,跨 `decay_steps` 个 train batch
   (内部计数,验证调用不计);
 - `γ^{T}`:折扣,`T` = rollout token 数;`γ=1.0`(默认)时恒为 1,不需要
@@ -101,7 +106,8 @@ advantage 的均值消去, 几乎不产生学习信号; (2) 秩归一化的组�
   BatchRewardManager(batch) 把 B query × G rollout 一次性传入
         ▼
   direct_recommendation_interdiv.rule_base_reward()
-        ├─ base reward:逐行复用 StepRule / sid_rewards(未改动)
+        ├─ 正确性 reward:逐行复用 correctness_reward_type 选中的实现
+        │  (steprule / onerec_rollout_beam / sid_rewards 注册表;未改动)
         └─ InterQueryDiversityAddon.compute_batch()
               ├─ 按 (split,index) 分组到 query(拒绝跨 query 混组)
               ├─ UserEmbeddingStore 查用户向量/历史/user_id
@@ -220,11 +226,11 @@ make games-sidreasoner-reward-curves ARGS="--metrics logs/<实验名>_interdiv_m
 |---|---|
 | `src/reward/user_represent/{__init__,registry,base,sasrec_encoder,bge_mean_encoder}.py` | 用户表征编码器接口 + 注册表(SASRec / BGE 均值) |
 | `src/data/sidreasoner_user_embed.py` | 离线 User Embedding 提取脚本(parquet → npz) |
-| `src/reward/interdiv/{__init__,bleu,cot_utils,user_store,neighbor,shaping,reward}.py` | BLEU / CoT 提取与成功判定 / 缓存查表 / Top-K 检索 / 塑形 / 编排 |
-| `src/reward/direct_recommendation_interdiv.py` | verl BatchRewardManager 入口(组合原 reward + 多样性) |
-| `scripts/sidreasoner/user_embed.sh` / `scripts/sidreasoner/rl_bleu.sh` | 提取 / 训练命令包装 |
-| `tests/test_interdiv.py` | 38 项单测(含入口兼容性) |
-| `tests/test_user_embed.py` | 13 项提取/编码器/泄漏测试 |
+| `src/reward/interdiv/{__init__,bleu,similarity,cot_utils,user_store,neighbor,shaping,reward}.py` | BLEU / n-gram Jaccard / CoT 与成功判定 / 缓存查表 / Top-K 检索 / 塑形(add·mul) / 编排 |
+| `src/reward/direct_recommendation_interdiv.py` | verl BatchRewardManager 入口(正确性 reward x 多样性 reward;`correctness_reward_type` 旧名 `base_reward_type` 兼容) |
+| `scripts/sidreasoner/user_embed.sh` + `rl_bleu.sh` / `rl_ngram.sh` / `rl_beam_bleu.sh` / `rl_beam_ngram.sh` / `rl_div.sh` | 提取 / 训练命令包装(正确性 x 多样性矩阵) |
+| `tests/test_interdiv.py` | 单测(含入口兼容性、combine、门控/度量矩阵) |
+| `tests/test_user_embed.py` | 提取/编码器/泄漏测试 |
 | `docs/sidreasoner_inter_query_diversity.md` | 本文档 |
 
 **修改**
@@ -234,7 +240,7 @@ make games-sidreasoner-reward-curves ARGS="--metrics logs/<实验名>_interdiv_m
 | `config/sidreasoner.py` | 新增 `rl.inter_query_diversity` 配置块(默认关闭) |
 | `scripts/sidreasoner/rl.sh` | 新增 `INTER_DIV` 分支(关闭时零改动);新增 `${INTERDIV_FLAGS}` 占位 |
 | `Makefile` | 新增 `<dataset>-sidreasoner-user-embed`、`<dataset>-sidreasoner-rl-bleu` |
-| `src/eval/result_routing.py` | 评测结果路由识别 `_bleu` 后缀 -> `think_bleu/` |
+| `src/eval/result_routing.py` | 评测结果路由识别 `_<corr>_<div>` 后缀 -> `think_<corr>_<div>/`(旧 `_bleu`/`_ngram` 兼容) |
 | `tests/test_sid_rewards.py` | 修复历史遗留的 `torch.no_grad` 全局污染(导入后恢复),使全量测试顺序无关 |
 
 **未改动**:StepRule / Rollout-Beam reward、Stage 1/2、模型结构、GRPO
@@ -244,33 +250,53 @@ advantage、verl fork(仅使用其自带 `batch` reward manager)。
 
 ## 5. 训练命令(服务器)
 
+正确性 reward(StepRule / Rollout-Beam)与多样性 reward(BLEU / n-gram)解耦,
+`COMBINE=add|mul` 控制合并;通用入口 `rl-div` 也支持两者组合:
+
 ```bash
-# 0) 前置: Stage 2 checkpoint 已就绪;SASRec checkpoint 存在(或 ENCODER=bge_mean)
+# 0) 前置: Stage 2 checkpoint 就绪;SASRec checkpoint 存在(或 ENCODER=bge_mean)
 
 # 1) 离线 User Embedding(每个数据集一次;parquet 更新后需重跑)
 make games-sidreasoner-user-embed
 
-# 2) 启用跨 Query 多样性(steprule 基础奖励;产物自动加 _bleu 后缀)
-make games-sidreasoner-rl-bleu
+# 2) 正确性 x 多样性(StepRule 底座, 加法合并)
+make games-sidreasoner-rl-bleu        # 产物 ..._Qwen3-1.7B_steprule_bleu
+make games-sidreasoner-rl-ngram       # 产物 ..._Qwen3-1.7B_steprule_ngram
 
-# 3) 与 Rollout-Beam 组合
-make games-sidreasoner-rl-bleu REWARD=rollout_beam_div
+# 3) Rollout-Beam 底座(需修改版 verl fork)
+make games-sidreasoner-rl-beam-bleu   # 产物 ..._Qwen3-1.7B_rolloutbeam_bleu
+make games-sidreasoner-rl-beam-ngram  # 产物 ..._Qwen3-1.7B_rolloutbeam_ngram
 
-# 3b) n-gram Jaccard 度量(产物自动加 _ngram 后缀)
-make games-sidreasoner-rl-ngram
+# 4) 通用入口(任意组合; COMBINE=mul 为乘法: R' = R*(1+intrinsic))
+make games-sidreasoner-rl-div CORR=beam DIV=ngram COMBINE=mul
+make games-sidreasoner-rl-div CORR=beam-div DIV=bleu
 
-# 4) 合并 / 评估(结果路由到 Games/think_bleu/)
-make games-sidreasoner-merge RL_SUFFIX=_bleu
-make games-sidreasoner-merge RL_SUFFIX=_ngram
+# 5) 合并 / 评估(think 目录按 <corr>_<div> 路由)
+make games-sidreasoner-merge RL_SUFFIX=_steprule_bleu
 make games-sidreasoner-think \
-    MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_bleu/global_step_100/actor_merged
+    MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_steprule_bleu/global_step_100/actor_merged
+# -> results/sidreasoner/Games/think_steprule_bleu/step_100.json
+# 多样性分析镜像 -> results/diversity/Games/think_steprule_bleu/step_100.json
+make games-diversity-analyze INPUT=results/sidreasoner/Games/think_steprule_bleu/step_100.json
 
-# 5) 关闭(默认):与原 Stage 3 完全一致,不需要 embedding 文件
+# 6) 关闭(默认):与原 Stage 3 完全一致,不需要 embedding 文件
 make games-sidreasoner-rl
 ```
 
-调参全部走 `config/sidreasoner.py` 的 `rl.inter_query_diversity`(或在
-config 里直接 `enable: True`);无需改任何脚本。
+产物路由(`<corr>` ∈ steprule/rolloutbeam/rolloutbeam_div,
+`<div>` ∈ bleu/ngram):
+
+| 环节 | 路径 |
+|---|---|
+| checkpoint | `checkpoints/RecRL_Reasoning/<C>_stage3_rl_Qwen3-1.7B[_own][_<corr>][_<div>]/` |
+| 训练指标(JSONL) | `logs/<同名实验>_interdiv_metrics.jsonl` |
+| 思考评测 | `results/sidreasoner/<D>/think_<corr>[_<div>]/step_N.json` |
+| 多样性分析 | `results/diversity/<D>/think_<corr>[_<div>]/step_N.json`(镜像输入) |
+| reward 曲线 | `results/sidreasoner/<D>/figures/rewards.png` |
+
+注意: 启用多样性后实验名统一为 `_<corr>_<div>`(如 `_steprule_bleu`),
+与改造前的 `_bleu`/`_ngram` 不同;训练数学与超参未变。旧后缀 checkpoint
+的评测路由仍兼容(`think_bleu` / `think_ngram`)。
 
 ---
 

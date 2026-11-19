@@ -34,17 +34,24 @@ def shape_rewards(
     gamma: float = 1.0,
     sigma: float = 0.5,
     lam: float = 0.0,
+    combine: str = "add",
 ):
     """逐 rollout 计算 intrinsic 与 augmented reward(纯 numpy)。
 
     Args:
-        base_rewards: (N,) 原始推荐 reward, 原样保留。
+        base_rewards: (N,) 原始推荐 reward(正确性 reward), 原样保留。
         success_mask: (N,) bool, 推荐成功指示 I。
         td_values: (N,) float, 跨用户 TD d(o)。
         token_counts: (N,) 可选, rollout token 数 T(gamma<1 时用于 gamma^T)。
         gamma: 折扣因子(默认 1.0)。
         sigma: intrinsic 裁剪上界。
         lam: 当前步多样性权重 lambda(t)。
+        combine: 正确性 x 多样性的合并方式:
+            - "add"(默认): R' = R + intrinsic(DIVER 塑形);
+            - "mul":       R' = R * (1 + intrinsic) —— 多样性按比例放大
+              正确性 reward(R=0 的 rollout 不获得任何加成; 与
+              rl-beam-div 的乘法思想同源, 但保留 DIVER 的 lambda/sigma/
+              条件塑形语义)。
 
     Returns:
         (intrinsic: (N,) float, augmented: (N,) float)
@@ -61,7 +68,11 @@ def shape_rewards(
 
     clipped = np.clip(discounted, 0.0, float(sigma))
     intrinsic = float(lam) * success.astype(np.float64) * clipped
-    return intrinsic, base + intrinsic
+    if combine == "mul":
+        return intrinsic, base * (1.0 + intrinsic)
+    if combine == "add":
+        return intrinsic, base + intrinsic
+    raise ValueError(f"未知 combine: {combine!r}(add | mul)")
 
 
 def rank_normalize(values) -> "np.ndarray":

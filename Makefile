@@ -57,6 +57,14 @@ endif
 	games-sidreasoner-rl-data office-sidreasoner-rl-data industrial-sidreasoner-rl-data \
 	games-sidreasoner-chat office-sidreasoner-chat industrial-sidreasoner-chat \
 	games-sidreasoner-curves office-sidreasoner-curves industrial-sidreasoner-curves \
+	games-sidreasoner-rl-bleu office-sidreasoner-rl-bleu industrial-sidreasoner-rl-bleu \
+	games-sidreasoner-rl-ngram office-sidreasoner-rl-ngram industrial-sidreasoner-rl-ngram \
+	games-sidreasoner-rl-beam-bleu office-sidreasoner-rl-beam-bleu industrial-sidreasoner-rl-beam-bleu \
+	games-sidreasoner-rl-beam-ngram office-sidreasoner-rl-beam-ngram industrial-sidreasoner-rl-beam-ngram \
+	games-sidreasoner-rl-div office-sidreasoner-rl-div industrial-sidreasoner-rl-div \
+	games-sidreasoner-user-embed office-sidreasoner-user-embed industrial-sidreasoner-user-embed \
+	games-sidreasoner-reward-probe office-sidreasoner-reward-probe industrial-sidreasoner-reward-probe \
+	games-sidreasoner-reward-curves office-sidreasoner-reward-curves industrial-sidreasoner-reward-curves \
 	sidreasoner-organize \
 	games-rqvae office-rqvae industrial-rqvae \
 	games-rqvae-embed office-rqvae-embed industrial-rqvae-embed \
@@ -238,6 +246,29 @@ endef
 $(eval $(call SIDREASONER_TARGET_NGRAM,games))
 $(eval $(call SIDREASONER_TARGET_NGRAM,office))
 $(eval $(call SIDREASONER_TARGET_NGRAM,industrial))
+
+# Stage 3 RL: Rollout-Beam 正确性 reward + 多样性(前置同 rl-bleu)
+define SIDREASONER_TARGET_BEAM_DIV
+$(1)-sidreasoner-$(3):
+	DATASET=$(1) CUDA_VISIBLE_DEVICES="$(SIDR_GPUS)" bash scripts/sidreasoner/rl_beam_$(2).sh
+endef
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,games,bleu,rl-beam-bleu))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,office,bleu,rl-beam-bleu))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,industrial,bleu,rl-beam-bleu))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,games,ngram,rl-beam-ngram))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,office,ngram,rl-beam-ngram))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,industrial,ngram,rl-beam-ngram))
+
+# Stage 3 RL 通用入口: CORR=steprule|beam|beam-div, DIV=bleu|ngram|none,
+# COMBINE=add|mul(默认取 config); 例:
+#   make games-sidreasoner-rl-div CORR=beam DIV=ngram COMBINE=mul
+define SIDREASONER_TARGET_DIV
+$(1)-sidreasoner-rl-div:
+	DATASET=$(1) CUDA_VISIBLE_DEVICES="$(SIDR_GPUS)" CORR=$$$${CORR:-steprule} DIV=$$$${DIV:-bleu} COMBINE=$$$${COMBINE:-} bash scripts/sidreasoner/rl_div.sh
+endef
+$(eval $(call SIDREASONER_TARGET_DIV,games))
+$(eval $(call SIDREASONER_TARGET_DIV,office))
+$(eval $(call SIDREASONER_TARGET_DIV,industrial))
 
 # Stage 3 RL 训练曲线(需 .venv 内安装 matplotlib: .venv/bin/pip install matplotlib)
 define SIDREASONER_CURVES_TARGET

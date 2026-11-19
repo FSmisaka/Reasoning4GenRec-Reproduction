@@ -142,7 +142,7 @@ INTERDIV_FLAGS=""
 if [[ "${INTER_DIV}" == "True" ]]; then
   read -r IQD_ENC IQD_PATH IQD_K IQD_JAC IQD_LI IQD_LF IQD_DS IQD_GAMMA \
         IQD_SIGMA IQD_DIVLEN IQD_SEED IQD_METRICS IQD_SUCCESS IQD_REF IQD_SMOOTH IQD_TDNORM \
-        IQD_SIM IQD_NGRAM_N \
+        IQD_SIM IQD_NGRAM_N IQD_COMBINE \
         < <(${PY} - <<'EOF'
 from config import load_config
 import os
@@ -157,7 +157,8 @@ print(enc, path, iqd.get("top_k_neighbors", 8), iqd.get("same_user_jaccard", 0.8
       iqd.get("seed", 0), iqd.get("metrics_path") or "-",
       iqd.get("success_mode", "full"), iqd.get("reference_mode", "success"),
       iqd.get("bleu_smoothing", "none"), iqd.get("td_norm", "none"),
-      iqd.get("similarity", "bleu"), iqd.get("ngram_n", 1))
+      iqd.get("similarity", "bleu"), iqd.get("ngram_n", 1),
+      iqd.get("combine", "add"))
 EOF
 )
   # metrics_path 用 "-" 占位避免空字段导致 read 变量错位
@@ -173,6 +174,20 @@ EOF
     bleu)          IQD_METRIC_SUFFIX="bleu" ;;
     ngram_jaccard) IQD_METRIC_SUFFIX="ngram" ;;
     *) echo "错误: 未知 similarity='${IQD_SIM}' (可选 bleu | ngram_jaccard)" >&2; exit 1 ;;
+  esac
+  # 合并方式: COMBINE(add|mul) 环境变量覆盖 config
+  if [[ -n "${COMBINE:-}" ]]; then
+    case "${COMBINE}" in
+      add|mul) IQD_COMBINE="${COMBINE}" ;;
+      *) echo "错误: 未知 COMBINE='${COMBINE}' (可选 add | mul)" >&2; exit 1 ;;
+    esac
+  fi
+  # 正确性 reward 标签(实验名/路由用): steprule | rolloutbeam | rolloutbeam_div
+  case "${REWARD}" in
+    steprule)         IQD_CORR="steprule" ;;
+    rollout_beam)     IQD_CORR="rolloutbeam" ;;
+    rollout_beam_div) IQD_CORR="rolloutbeam_div" ;;
+    *)                IQD_CORR="steprule" ;;
   esac
   if [[ ! -f "${IQD_PATH}" ]]; then
     echo "错误: 未找到 User Embedding 缓存 ${IQD_PATH}。" >&2
@@ -191,7 +206,7 @@ EOF
   # in-batch 邻居检索在 driver 端全局 batch 上进行, 天然跨 DP rank 一致。
   INTERDIV_FLAGS="reward_model.reward_manager=batch"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.enable_inter_query_diversity=true"
-  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.base_reward_type=${BASE_REWARD_TYPE}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.correctness_reward_type=${BASE_REWARD_TYPE}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.user_embedding_path=$(pwd)/${IQD_PATH}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.top_k_neighbors=${IQD_K}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.same_user_jaccard=${IQD_JAC}"
@@ -208,11 +223,18 @@ EOF
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.td_norm=${IQD_TDNORM}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.similarity=${IQD_SIM}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.ngram_n=${IQD_NGRAM_N}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.combine=${IQD_COMBINE}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.model_path=$(pwd)/${STAGE2_CKPT}"
   if [[ -n "${IQD_METRICS}" ]]; then
     INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.metrics_path=$(pwd)/${IQD_METRICS}"
   fi
-  REWARD_SUFFIX="${REWARD_SUFFIX}_${IQD_METRIC_SUFFIX}"
+  # 多样性奖励的产物命名携带正确性 reward: _<corr>_<metric>
+  # (如 _steprule_bleu / _rolloutbeam_ngram; think 路由同名 think_<corr>_<metric>)。
+  # REWARD_SUFFIX 在 beam 分支已含 _rolloutbeam[_div], 此时只追加 _<metric>。
+  case "${REWARD}" in
+    steprule) REWARD_SUFFIX="${REWARD_SUFFIX}_${IQD_CORR}_${IQD_METRIC_SUFFIX}" ;;
+    *)        REWARD_SUFFIX="${REWARD_SUFFIX}_${IQD_METRIC_SUFFIX}" ;;
+  esac
 fi
 
 EXPERIMENT_NAME="${CATEGORY}_stage3_rl_Qwen3-1.7B${SID_SUFFIX}${REWARD_SUFFIX}"

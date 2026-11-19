@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# SIDReasoner Stage 3 变体: 跨 Query CoT 多样性奖励(DIVER 改造版)
-# 等价于 INTER_DIV=1 bash scripts/sidreasoner/rl.sh,
-# 在原 reward(steprule, 可用 REWARD= 换成 beam 族)上叠加
-# R' = R + lambda*I*clip(gamma^T * TD, 0, sigma), 参数在
-# config/sidreasoner.py 的 rl.inter_query_diversity 段调整。
-# 前置: make <dataset>-sidreasoner-user-embed 生成离线 User Embedding。
+# SIDReasoner Stage 3 变体: 跨 Query CoT 多样性(BLEU 度量; 正确性 reward = StepRule)
+# 等价于 REWARD=steprule INTER_DIV=1 INTER_DIV_METRIC=bleu bash scripts/sidreasoner/rl.sh,
+# 合并方式(combine=add|mul)与门控参数取 config 的 rl.inter_query_diversity。
+# 产物实验名自动加 _steprule_bleu 后缀。
+# 前置: make <dataset>-sidreasoner-user-embed;
 set -euo pipefail
+export REWARD=steprule
 export INTER_DIV=1
+export INTER_DIV_METRIC=bleu
 exec bash "$(dirname "$0")/rl.sh" "$@"
