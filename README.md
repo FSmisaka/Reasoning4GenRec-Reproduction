@@ -65,6 +65,7 @@ make tmux TARGET=games-sidreasoner-activation-gem SESSION=act-gem-games
 make tmux TARGET=games-sidreasoner-rl-beam SESSION=rl-beam-games
 make tmux TARGET=games-sidreasoner-rl-beam-div SESSION=rl-beam-div-games
 make tmux TARGET=games-sidreasoner-rl-bleu SESSION=rl-bleu-games
+make tmux TARGET=games-sidreasoner-rl-ngram SESSION=rl-ngram-games
 
 tmux ls                                # 1. 列出服务器上仍在跑的会话
 tmux attach -t sft                     # 2. 接回对应会话(Ctrl-b d 只退出查看, 不停任务)
@@ -82,6 +83,7 @@ make games-sidreasoner-think \
     MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B/global_step_100/actor_merged
 make games-sidreasoner-metrics         # 自动取最新 think 结果, 可用 RESULT=xxx.json 指定
 make games-sidreasoner-curves          # 默认画全部: NDCG@5/10, HR@5/10
+make games-sidreasoner-reward-curves  # Stage 3 reward 组成曲线(正确性/多样性/总 reward)
 make games-sidreasoner-curves ARGS="--metric NDCG@10"
 
 # 非思考模式: MODEL 取 stage1 / stage2 / 任意 checkpoint 路径

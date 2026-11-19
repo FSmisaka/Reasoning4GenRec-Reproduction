@@ -96,8 +96,12 @@ def main(
             "evaluation.think_eval_model 指定"
         )
 
-    # ---- 解码设置(采样 vs 贪心) ----
-    think_temperature = float(eval_cfg.get("think_temperature", 0.0))
+    # ---- 解码设置(采样 vs 贪心); 环境变量 THINK_TEMPERATURE /
+    # SAVE_PER_SEED 可临时覆盖 config, 便于多样性分析等用途免改配置 ----
+    think_temperature = float(
+        os.environ.get("THINK_TEMPERATURE")
+        or eval_cfg.get("think_temperature", 0.0)
+    )
     think_top_p = float(eval_cfg.get("think_top_p", 0.95))
     ci_level = float(eval_cfg.get("ci_level", 0.95))
     if think_temperature > 0:
@@ -109,8 +113,9 @@ def main(
         multi_seed = False
     # 多 seed 模式默认只写 summary(已含逐 seed 指标);
     # 需要单 seed 明细(如多样性分析导入 cot)时置 true
-    save_per_seed = multi_seed and bool(
-        eval_cfg.get("save_per_seed_results", False)
+    save_per_seed = multi_seed and (
+        bool(os.environ.get("SAVE_PER_SEED"))
+        or bool(eval_cfg.get("save_per_seed_results", False))
     )
 
     if result_json_data is None:

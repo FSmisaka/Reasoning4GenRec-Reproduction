@@ -379,6 +379,18 @@ class InterQueryDiversityAddon:
     def _log_metrics(self, **m):
         success = m["success_arr"]
         td = m["td_arr"]
+        def _mms(arr) -> dict:
+            """mean/max/min 三统计(与 verl critic/rewards/* 同口径, 逐 train batch)。"""
+            a = np.asarray(arr, dtype=np.float64)
+            return {
+                "mean": float(a.mean()),
+                "max": float(a.max()),
+                "min": float(a.min()),
+            }
+
+        base_mms = _mms(m["base_rewards"])        # 正确性 reward(StepRule / Rollout-Beam)
+        div_mms = _mms(m["intrinsic"])            # 多样性 reward(BLEU / n-gram)
+        tot_mms = _mms(m["augmented"])            # 总 reward(= verl critic/rewards)
         record = {
             "step": m["step"],
             "lambda": m["lam"],
@@ -390,12 +402,23 @@ class InterQueryDiversityAddon:
             "bleu_smoothing": getattr(self.scorer, "smoothing", None),
             "ngram_n": getattr(self.scorer, "n", None),
             "td_norm": self.td_norm,
-            "base_reward_mean": float(np.mean(m["base_rewards"])),
-            "augmented_reward_mean": float(np.mean(m["augmented"])),
+            # ---- reward 组成三统计(mean/max/min), 命名对齐 verl critic/* ----
+            "critic/correctness_rewards/mean": base_mms["mean"],
+            "critic/correctness_rewards/max": base_mms["max"],
+            "critic/correctness_rewards/min": base_mms["min"],
+            "critic/diversity_rewards/mean": div_mms["mean"],
+            "critic/diversity_rewards/max": div_mms["max"],
+            "critic/diversity_rewards/min": div_mms["min"],
+            "critic/total_rewards/mean": tot_mms["mean"],
+            "critic/total_rewards/max": tot_mms["max"],
+            "critic/total_rewards/min": tot_mms["min"],
+            # ---- 兼容旧字段(保留勿删, 旧绘图/脚本可能引用) ----
+            "base_reward_mean": base_mms["mean"],
+            "augmented_reward_mean": tot_mms["mean"],
+            "intrinsic_mean": div_mms["mean"],
             "success_rate": float(np.mean(success)) if len(success) else 0.0,
             "td_mean": float(np.mean(td)) if len(td) else 0.0,
             "td_success_mean": float(np.mean(td[success])) if success.any() else 0.0,
-            "intrinsic_mean": float(np.mean(m["intrinsic"])) if len(m["intrinsic"]) else 0.0,
             "neighbor_sim_mean": m["neighbor_sim_mean"],
             "valid_neighbors_mean": m["valid_neighbors_mean"],
             "elapsed_s": round(m["elapsed"], 3),

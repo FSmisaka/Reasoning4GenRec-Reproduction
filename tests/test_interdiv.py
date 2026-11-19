@@ -760,6 +760,24 @@ def test_addon_similarity_ngram_jaccard(addon):
     assert all(0.0 < r["td"] <= 1.0 for r in out[1:4])
 
 
+def test_addon_logs_reward_breakdown_mms(addon):
+    """JSONL 逐 step 记录 correctness/diversity/total 的 mean/max/min。"""
+    ad, n_q, g = addon(n_queries=2, rollout_n=4, top_k_neighbors=1,
+                       lambda_init=0.3, sigma=1.0)
+    rows = _make_batch([("train", 0, "a"), ("train", 1, "b")], rollout_n=4)
+    out = ad.compute_batch(rows, [0.5] * len(rows))
+    rec = json.loads(open(ad.metrics_path).read().strip().splitlines()[-1])
+
+    base = [r["base_reward"] for r in out]
+    div = [r["intrinsic"] for r in out]
+    tot = [r["score"] for r in out]
+    for name, arr in (("correctness", base), ("diversity", div), ("total", tot)):
+        assert rec[f"critic/{name}_rewards/mean"] == pytest.approx(
+            sum(arr) / len(arr), abs=1e-9)
+        assert rec[f"critic/{name}_rewards/max"] == pytest.approx(max(arr), abs=1e-9)
+        assert rec[f"critic/{name}_rewards/min"] == pytest.approx(min(arr), abs=1e-9)
+
+
 def test_addon_rejects_unknown_similarity(addon):
     ad, _, _ = addon(n_queries=2, rollout_n=2)
     with pytest.raises(ValueError):

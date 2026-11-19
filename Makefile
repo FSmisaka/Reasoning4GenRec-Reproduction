@@ -259,6 +259,17 @@ $(eval $(call SIDREASONER_REWARD_PROBE_TARGET,games))
 $(eval $(call SIDREASONER_REWARD_PROBE_TARGET,office))
 $(eval $(call SIDREASONER_REWARD_PROBE_TARGET,industrial))
 
+# Stage 3 reward 组成曲线(正确性/多样性/总 reward; 数据来自 rl-bleu/rl-ngram
+# 训练日志 logs/<C>_..._interdiv_metrics.jsonl, 需 pip install matplotlib;
+# ARGS 传参如 ARGS="--metrics logs/xxx_interdiv_metrics.jsonl")
+define SIDREASONER_REWARD_CURVES_TARGET
+$(1)-sidreasoner-reward-curves:
+	DATASET=$(1) $(PY) -m src.eval.sidreasoner_reward_curves $$$${ARGS:-}
+endef
+$(eval $(call SIDREASONER_REWARD_CURVES_TARGET,games))
+$(eval $(call SIDREASONER_REWARD_CURVES_TARGET,office))
+$(eval $(call SIDREASONER_REWARD_CURVES_TARGET,industrial))
+
 $(eval $(call SIDREASONER_METRICS_TARGET,games,Video_Games,Games))
 $(eval $(call SIDREASONER_METRICS_TARGET,office,Office_Products,Office))
 $(eval $(call SIDREASONER_METRICS_TARGET,industrial,Industrial_and_Scientific,Industrial))

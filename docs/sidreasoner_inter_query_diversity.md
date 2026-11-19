@@ -181,11 +181,30 @@ Jaccard≥0.8 兜底不会误伤)。
 
 ### 日志
 
-每个 train batch 追加一行 JSON 到 `interdiv_metrics.jsonl`,并打印摘要:
+每个 train batch 追加一行 JSON 到 `logs/<实验名>_interdiv_metrics.jsonl`
+(rl.sh 自动按实验名隔离),并打印摘要。reward 组成三统计(命名对齐 verl
+critic/*,供 `make <ds>-sidreasoner-reward-curves` 画图):
 
 ```
 [interdiv] step=0 lam=0.2000 base=0.2750 aug=0.2798 success=0.250 td=0.1251
            td_ok=0.0963 intr=0.0048 nbrs=8.00 sim=0.6590 (0.1s)
+```
+
+JSONL 逐 step 含:
+
+| 字段 | 含义 |
+|---|---|
+| `critic/correctness_rewards/{mean,max,min}` | 正确性 reward(StepRule / Rollout-Beam) |
+| `critic/diversity_rewards/{mean,max,min}` | 多样性 reward(BLEU / n-gram) |
+| `critic/total_rewards/{mean,max,min}` | 总 reward(= verl 的 critic/rewards) |
+| `lambda` / `success_rate` / `td_mean` / `valid_neighbors_mean` / ... | 塑形与诊断量 |
+
+reward 组成曲线(样式与 `sidreasoner_rl_curves.py` 一致, 展示哪些曲线改
+`src/eval/sidreasoner_reward_curves.py` 的 `DEFAULT_SERIES`):
+
+```bash
+make games-sidreasoner-reward-curves        # -> results/sidreasoner/Games/figures/rewards.png
+make games-sidreasoner-reward-curves ARGS="--metrics logs/<实验名>_interdiv_metrics.jsonl"
 ```
 
 字段:原始 reward 均值、增广 reward 均值、推荐成功率、全部/成功 rollout 的

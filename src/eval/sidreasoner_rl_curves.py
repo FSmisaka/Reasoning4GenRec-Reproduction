@@ -74,6 +74,10 @@ DEFAULT_SERIES = [
      "subdir": "think_rolloutbeam_temp", "color": C_BLUE, "ls": ":", "marker": "v"},
     {"label": "StepRule (temp)",
      "subdir": "think_steprule_temp", "color": C_GRAY, "ls": ":", "marker": "D"},
+    {"label": "BLEU",
+     "subdir": "think_bleu", "color": C_BLUE, "ls": "-", "marker": "o"},
+    {"label": "N-Gram",
+     "subdir": "think_ngram", "color": C_RED, "ls": "--", "marker": "s"},
 ]
 
 # SIDReasoner 官方论文(arXiv:2603.23183, Table 2)思考模式的最终结果,
