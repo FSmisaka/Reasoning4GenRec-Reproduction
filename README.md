@@ -206,7 +206,8 @@ make games-sidreasoner-rl-beam-llmjudge
 - `JUDGE_URL` / `JUDGE_MODEL` / `JUDGE_CONCURRENCY` 环境变量可覆盖
   `config/sidreasoner.py` 的 `rl.inter_query_diversity.judge_*`。
 - judge 解析失败按全维 2 分回退, 训练日志 `judge_calls` / `judge_fallback`
-  记录调用量与回退量。
+  记录调用量与回退量; `--judge-meta` 会在探针 JSON 旁生成
+  `<name>.judge_pairs.md`(逐对的 history / CoT / 三维分 / judge 原始输出)。
 - 冒烟(小 batch): `make games-sidreasoner-reward-probe ARGS="--reward llmjudge --judge-meta 8 --n-queries 4 --rollout-n 2"`。
 
 # 4. 自建 SID(独立训练 RQ-VAE)

@@ -99,7 +99,7 @@ class LLMJudge:
         prompt_path: str = _PROMPT_PATH,
         concurrency: int = 32,
         temperature: float = 0.0,
-        max_tokens: int = 96,
+        max_tokens: int = 256,
     ):
         self.base_url = base_url
         self.model = model
@@ -110,6 +110,9 @@ class LLMJudge:
             self.template = f.read()
         self.n_calls = 0
         self.n_fallback = 0
+        # 最近一次 judge_pairs 的逐对原始输出/是否解析成功(与输入对一一对应)
+        self.last_raw = []
+        self.last_parsed = []
 
     async def _judge_async(self, pairs: list) -> list:
         from openai import AsyncOpenAI
@@ -117,7 +120,7 @@ class LLMJudge:
         client = AsyncOpenAI(base_url=self.base_url, api_key="EMPTY")
         sem = asyncio.Semaphore(self.concurrency)
 
-        async def one(a: str, b: str) -> dict:
+        async def one(a: str, b: str):
             ha, ca = split_block(a)
             hb, cb = split_block(b)
             prompt = (
@@ -135,16 +138,18 @@ class LLMJudge:
                     extra_body={"chat_template_kwargs": {"enable_thinking": False}},
                 )
             self.n_calls += 1
-            scores = parse_scores(r.choices[0].message.content)
+            content = r.choices[0].message.content or ""
+            scores = parse_scores(content)
             if scores is None:
                 self.n_fallback += 1
-                return {k: 2 for k in _KEYS}
-            return scores
+                return {k: 2 for k in _KEYS}, False, content
+            return scores, True, content
 
-        try:
-            return list(await asyncio.gather(*(one(a, b) for a, b in pairs)))
-        finally:
-            await client.close()
+        results = await asyncio.gather(*(one(a, b) for a, b in pairs))
+        await client.close()
+        self.last_raw = [raw for _, _, raw in results]
+        self.last_parsed = [ok for _, ok, _ in results]
+        return [scores for scores, _, _ in results]
 
     def judge_pairs(self, pairs: list) -> list:
         """逐对返回 {dim: 0..4}; 解析失败回退全 2(中性相似度 0.5)。"""

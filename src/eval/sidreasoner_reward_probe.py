@@ -13,7 +13,8 @@
 3. --batch-json <旧探针输出>: 复用上次生成的 batch, 只换 reward 重跑,
    不再重复生成(新 reward 对比实验的推荐用法);
 4. --judge-meta N: LLM-Judge 元评测。组内/跨用户各抽样 CoT 对, 记录
-   judge 的逐维打分与相似度, 写入 payload["judge_pairs"](含历史与原文)。
+   judge 的逐维打分与相似度, 写入 payload["judge_pairs"](含历史与原文),
+   并在探针 JSON 旁生成 <name>.judge_pairs.md 逐对明细(含 judge 原始输出)。
 
 输出(默认 results/reward_probe/<Category>_stage3_rl_<label>_probe.json,
 命名对齐 Stage 3 实验名后缀): meta / summary(组内区分度统计) /
@@ -487,8 +488,10 @@ def judge_meta_eval(rows: list, n_pairs: int, judge, history, seed: int = 0) -> 
     scores = judge.judge_pairs(
         [(block(ka, i), block(kb, j)) for _, ka, kb, i, j in pairs]
     )
+    raws = getattr(judge, "last_raw", [""] * len(pairs))
+    parsed = getattr(judge, "last_parsed", [True] * len(pairs))
     records = []
-    for (kind, ka, kb, i, j), s in zip(pairs, scores):
+    for (kind, ka, kb, i, j), s, raw, ok in zip(pairs, scores, raws, parsed):
         sim = sum(s.values()) / (4.0 * len(s))
         records.append(
             {
@@ -502,6 +505,8 @@ def judge_meta_eval(rows: list, n_pairs: int, judge, history, seed: int = 0) -> 
                 "scores": s,
                 "similarity": sim,
                 "diversity": 1.0 - sim,
+                "parsed": bool(ok),
+                "raw": raw,
             }
         )
     summary = {}
@@ -517,6 +522,90 @@ def judge_meta_eval(rows: list, n_pairs: int, judge, history, seed: int = 0) -> 
                 },
             }
     return {"pairs": records, "summary": summary}
+
+
+def _fmt_query(q) -> str:
+    return f"{q['split']}[{q['index']}]"
+
+
+def judge_report_md(judge_pairs: dict, info: dict) -> str:
+    """逐对明细的 Markdown 报告(历史 + CoT + 三维打分 + judge 原始输出)。"""
+    recs = judge_pairs["pairs"]
+    out = [
+        "# LLM-Judge 元评测",
+        "",
+        f"- 数据集: {info['category']}",
+        f"- judge: {info['model']} @ {info['base_url']}",
+        f"- 对数: {len(recs)}",
+        f"- judge 调用: {info['calls']}，解析失败回退: {info['fallback']}",
+        "",
+    ]
+    if judge_pairs["summary"]:
+        out += [
+            "## 分组均值",
+            "",
+            "| type | n | evidence | strategy | profile | sim | td |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for kind, st in judge_pairs["summary"].items():
+            out.append(
+                f"| {kind} | {st['n']} | {st['mean_evidence']:.2f} | "
+                f"{st['mean_strategy']:.2f} | {st['mean_profile']:.2f} | "
+                f"{st['mean_similarity']:.3f} | {1 - st['mean_similarity']:.3f} |"
+            )
+        out.append("")
+    out += [
+        "## 逐对打分",
+        "",
+        "| # | type | query A | query B | evidence | strategy | profile | sim | td | 解析 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for i, r in enumerate(recs):
+        s = r["scores"]
+        out.append(
+            f"| {i} | {r['type']} | {_fmt_query(r['query_a'])} | "
+            f"{_fmt_query(r['query_b'])} | {s['evidence']} | {s['strategy']} | "
+            f"{s['profile']} | {r['similarity']:.3f} | {r['diversity']:.3f} | "
+            f"{'OK' if r.get('parsed', True) else 'FALLBACK'} |"
+        )
+    out += ["", "## 明细", ""]
+    for i, r in enumerate(recs):
+        s = r["scores"]
+        flag = "" if r.get("parsed", True) else "  **解析失败, 全 2 回退**"
+        out += [
+            f"### {i}. {r['type']}: {_fmt_query(r['query_a'])} vs {_fmt_query(r['query_b'])}",
+            "",
+            f"evidence **{s['evidence']}** / strategy **{s['strategy']}** / "
+            f"profile **{s['profile']}** → sim {r['similarity']:.3f} / "
+            f"td {r['diversity']:.3f}{flag}",
+            "",
+            "**User A history**",
+            "````",
+            *r["history_a"],
+            "````",
+            "",
+            "**CoT A**",
+            "````",
+            r["cot_a"],
+            "````",
+            "",
+            "**User B history**",
+            "````",
+            *r["history_b"],
+            "````",
+            "",
+            "**CoT B**",
+            "````",
+            r["cot_b"],
+            "````",
+            "",
+            "**Judge raw output**",
+            "````json",
+            r.get("raw", ""),
+            "````",
+            "",
+        ]
+    return "\n".join(out)
 
 
 # --------------------------------------------------------------------------- #
@@ -630,6 +719,35 @@ def main(argv=None, cfg=None):
                 f"strategy={st['mean_strategy']:.2f} "
                 f"profile={st['mean_profile']:.2f}"
             )
+        print(f"[probe] judge calls={judge.n_calls} fallback={judge.n_fallback}")
+        print("[probe]  #  type         query A        query B        E S P   sim   解析")
+        for i, r in enumerate(judge_pairs["pairs"]):
+            s = r["scores"]
+            print(
+                f"[probe] {i:2d}  {r['type']:11s} {_fmt_query(r['query_a']):14s} "
+                f"{_fmt_query(r['query_b']):14s} {s['evidence']} {s['strategy']} "
+                f"{s['profile']}  {r['similarity']:.3f}  "
+                f"{'OK' if r.get('parsed', True) else 'FALLBACK'}"
+            )
+        report_path = (
+            out_path[:-5] + ".judge_pairs.md"
+            if out_path.endswith(".json")
+            else out_path + ".judge_pairs.md"
+        )
+        with open(report_path, "w") as f:
+            f.write(
+                judge_report_md(
+                    judge_pairs,
+                    {
+                        "category": category,
+                        "model": judge.model,
+                        "base_url": judge.base_url,
+                        "calls": judge.n_calls,
+                        "fallback": judge.n_fallback,
+                    },
+                )
+            )
+        print(f"[probe] judge 逐对明细 -> {report_path}")
 
     # ---- 汇总 & 落盘 ----
     report = aggregate(rows, results)
