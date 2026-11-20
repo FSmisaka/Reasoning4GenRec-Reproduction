@@ -122,6 +122,9 @@ def _get_addon(kwargs: dict):
             similarity=str(kwargs.get("similarity", "bleu")),
             ngram_n=int(kwargs.get("ngram_n", 1)),
             combine=str(kwargs.get("combine", "add")),
+            judge_base_url=str(kwargs.get("judge_base_url", "http://localhost:8000/v1")),
+            judge_model=str(kwargs.get("judge_model", "Qwen3-1.7B")),
+            judge_concurrency=int(kwargs.get("judge_concurrency", 32)),
         )
     return _ADDON
 

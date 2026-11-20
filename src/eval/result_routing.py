@@ -20,6 +20,7 @@ results/sidreasoner/ 下的产物统一组织为::
     think_steprule_ngram    StepRule x n-gram 多样性思考模式
     think_rolloutbeam_bleu  Rollout-Beam x BLEU 多样性思考模式
     think_rolloutbeam_ngram Rollout-Beam x n-gram 多样性思考模式
+    think_*_llmjudge        Rollout-Beam x LLM-Judge 多样性思考模式
     think_steprule_temp     原始 SIDReasoner 思考模式 + 采样温度(temperature > 0)
 
     泛化规则(按需自动创建, 不在固定清单内):
@@ -86,7 +87,7 @@ def variant_of_model(model) -> str:
     <C>_stage3_rl_Qwen3-1.7B[_own][_<corr>][_<div>]) ->
     "<corr>" / "<div>" / "<corr>_<div>":
       corr = steprule(默认, 无后缀) | rolloutbeam | rolloutbeam_div
-      div  = bleu | ngram
+      div  = bleu | ngram | llmjudge
     例: ..._steprule_bleu -> "steprule_bleu"(think 目录
     think_steprule_bleu/, 多样性分析镜像 results/diversity/.../think_steprule_bleu/)。
     旧后缀 _bleu / _ngram(不带 corr)仍按 "bleu" / "ngram" 识别。
@@ -102,7 +103,12 @@ def variant_of_model(model) -> str:
         corr = "steprule"
     else:
         corr = None
-    div = "ngram" if "_ngram" in path else ("bleu" if "_bleu" in path else None)
+    div = (
+        "llmjudge" if "_llmjudge" in path
+        else "ngram" if "_ngram" in path
+        else "bleu" if "_bleu" in path
+        else None
+    )
     variant = "_".join(x for x in (corr, div) if x)
     return variant or "steprule"
 

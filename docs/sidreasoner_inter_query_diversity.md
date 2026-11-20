@@ -32,10 +32,12 @@ R'_{q,i} = R_{q,i} + λ(t) * I_{q,i} * clip( γ^{T_{q,i}} * d(o_{q,i}), 0, σ )
   子集;`K_q = |N_K^valid(q)|`,为 0 时 `d = 0`;
 - `c~_{q'}`:邻居 q' 的 G 条 rollout 中随机选一条成功 CoT 作 Reference
   (多个成功时随机,seed 可配);
-- `similarity`(配置)可选 `bleu`(默认, 下式)或 `ngram_jaccard`:
+- `similarity`(配置)可选 `bleu`(默认, 下式)、`ngram_jaccard` 或 `llmjudge`:
   `sim(a,b) = |G_n(a)∩G_n(b)| / |G_n(a)∪G_n(b)|`(n-gram 集合 Jaccard,
   `ngram_n` 控阶数), `TD = 1 - sim`。`make <ds>-sidreasoner-rl-ngram`
-  即后者。
+  即 Jaccard 版。`llmjudge` 由 Qwen3 judge 看双方历史, 对 evidence /
+  strategy / profile 三维各评 0-4 相似度(`sim = mean/4`, 提示词见
+  `src/reward/interdiv/judge_prompt.txt`), `make <ds>-sidreasoner-rl-beam-llmjudge`。
 - `BLEU_sym(a,b) = (BLEU(ref=a,cand=b) + BLEU(ref=b,cand=a)) / 2`,
   口径与 DIVER 官方 `calculate_belu_matrix` 一致:
   whitespace 分词、截断前 1000 字符、5-gram 权重
@@ -226,9 +228,9 @@ make games-sidreasoner-reward-curves ARGS="--metrics logs/<实验名>_interdiv_m
 |---|---|
 | `src/reward/user_represent/{__init__,registry,base,sasrec_encoder,bge_mean_encoder}.py` | 用户表征编码器接口 + 注册表(SASRec / BGE 均值) |
 | `src/data/sidreasoner_user_embed.py` | 离线 User Embedding 提取脚本(parquet → npz) |
-| `src/reward/interdiv/{__init__,bleu,similarity,cot_utils,user_store,neighbor,shaping,reward}.py` | BLEU / n-gram Jaccard / CoT 与成功判定 / 缓存查表 / Top-K 检索 / 塑形(add·mul) / 编排 |
+| `src/reward/interdiv/{__init__,bleu,llmjudge,similarity,cot_utils,user_store,neighbor,shaping,reward}.py` + `judge_prompt.txt` | BLEU / n-gram Jaccard / LLM-Judge 语义相似度 / CoT 与成功判定 / 缓存查表 / Top-K 检索 / 塑形(add·mul) / 编排 |
 | `src/reward/direct_recommendation_interdiv.py` | verl BatchRewardManager 入口(正确性 reward x 多样性 reward;`correctness_reward_type` 旧名 `base_reward_type` 兼容) |
-| `scripts/sidreasoner/user_embed.sh` + `rl_bleu.sh` / `rl_ngram.sh` / `rl_beam_bleu.sh` / `rl_beam_ngram.sh` / `rl_div.sh` | 提取 / 训练命令包装(正确性 x 多样性矩阵) |
+| `scripts/sidreasoner/user_embed.sh` + `rl_bleu.sh` / `rl_ngram.sh` / `rl_beam_bleu.sh` / `rl_beam_ngram.sh` / `rl_beam_llmjudge.sh` / `rl_div.sh` | 提取 / 训练命令包装(正确性 x 多样性矩阵) |
 | `tests/test_interdiv.py` | 单测(含入口兼容性、combine、门控/度量矩阵) |
 | `tests/test_user_embed.py` | 提取/编码器/泄漏测试 |
 | `docs/sidreasoner_inter_query_diversity.md` | 本文档 |
@@ -266,6 +268,7 @@ make games-sidreasoner-rl-ngram       # 产物 ..._Qwen3-1.7B_steprule_ngram
 # 3) Rollout-Beam 底座(需修改版 verl fork)
 make games-sidreasoner-rl-beam-bleu   # 产物 ..._Qwen3-1.7B_rolloutbeam_bleu
 make games-sidreasoner-rl-beam-ngram  # 产物 ..._Qwen3-1.7B_rolloutbeam_ngram
+make games-sidreasoner-rl-beam-llmjudge  # LLM-Judge 语义多样性(先起 vllm serve, 见 README)
 
 # 4) 通用入口(任意组合; COMBINE=mul 为乘法: R' = R*(1+intrinsic))
 make games-sidreasoner-rl-div CORR=beam DIV=ngram COMBINE=mul

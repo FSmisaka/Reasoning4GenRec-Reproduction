@@ -142,7 +142,7 @@ INTERDIV_FLAGS=""
 if [[ "${INTER_DIV}" == "True" ]]; then
   read -r IQD_ENC IQD_PATH IQD_K IQD_JAC IQD_LI IQD_LF IQD_DS IQD_GAMMA \
         IQD_SIGMA IQD_DIVLEN IQD_SEED IQD_METRICS IQD_SUCCESS IQD_REF IQD_SMOOTH IQD_TDNORM \
-        IQD_SIM IQD_NGRAM_N IQD_COMBINE \
+        IQD_SIM IQD_NGRAM_N IQD_COMBINE IQD_JURL IQD_JMODEL IQD_JCONC \
         < <(${PY} - <<'EOF'
 from config import load_config
 import os
@@ -158,23 +158,31 @@ print(enc, path, iqd.get("top_k_neighbors", 8), iqd.get("same_user_jaccard", 0.8
       iqd.get("success_mode", "full"), iqd.get("reference_mode", "success"),
       iqd.get("bleu_smoothing", "none"), iqd.get("td_norm", "none"),
       iqd.get("similarity", "bleu"), iqd.get("ngram_n", 1),
-      iqd.get("combine", "add"))
+      iqd.get("combine", "add"),
+      iqd.get("judge_base_url", "http://localhost:8000/v1"),
+      iqd.get("judge_model", "Qwen3-1.7B"), iqd.get("judge_concurrency", 32))
 EOF
 )
   # metrics_path 用 "-" 占位避免空字段导致 read 变量错位
   [[ "${IQD_METRICS}" == "-" ]] && IQD_METRICS=""
-  # 多样性度量: INTER_DIV_METRIC(bleu|ngram) 覆盖 config 的 similarity
+  # 多样性度量: INTER_DIV_METRIC(bleu|ngram|llmjudge) 覆盖 config 的 similarity
   case "${INTER_DIV_METRIC:-}" in
     "")                      ;;
     bleu)                    IQD_SIM="bleu" ;;
     ngram|ngram_jaccard)     IQD_SIM="ngram_jaccard" ;;
-    *) echo "错误: 未知 INTER_DIV_METRIC='${INTER_DIV_METRIC}' (可选 bleu | ngram)" >&2; exit 1 ;;
+    llmjudge|llm_judge)      IQD_SIM="llmjudge" ;;
+    *) echo "错误: 未知 INTER_DIV_METRIC='${INTER_DIV_METRIC}' (可选 bleu | ngram | llmjudge)" >&2; exit 1 ;;
   esac
   case "${IQD_SIM}" in
     bleu)          IQD_METRIC_SUFFIX="bleu" ;;
     ngram_jaccard) IQD_METRIC_SUFFIX="ngram" ;;
-    *) echo "错误: 未知 similarity='${IQD_SIM}' (可选 bleu | ngram_jaccard)" >&2; exit 1 ;;
+    llmjudge)      IQD_METRIC_SUFFIX="llmjudge" ;;
+    *) echo "错误: 未知 similarity='${IQD_SIM}' (可选 bleu | ngram_jaccard | llmjudge)" >&2; exit 1 ;;
   esac
+  # llmjudge 服务参数可被 JUDGE_URL / JUDGE_MODEL / JUDGE_CONCURRENCY 覆盖
+  [[ -n "${JUDGE_URL:-}" ]] && IQD_JURL="${JUDGE_URL}"
+  [[ -n "${JUDGE_MODEL:-}" ]] && IQD_JMODEL="${JUDGE_MODEL}"
+  [[ -n "${JUDGE_CONCURRENCY:-}" ]] && IQD_JCONC="${JUDGE_CONCURRENCY}"
   # 合并方式: COMBINE(add|mul) 环境变量覆盖 config
   if [[ -n "${COMBINE:-}" ]]; then
     case "${COMBINE}" in
@@ -225,6 +233,9 @@ EOF
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.ngram_n=${IQD_NGRAM_N}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.combine=${IQD_COMBINE}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.model_path=$(pwd)/${STAGE2_CKPT}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.judge_base_url=${IQD_JURL}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.judge_model=${IQD_JMODEL}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.judge_concurrency=${IQD_JCONC}"
   if [[ -n "${IQD_METRICS}" ]]; then
     INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.metrics_path=$(pwd)/${IQD_METRICS}"
   fi

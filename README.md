@@ -44,32 +44,29 @@ make download-model        # Qwen3-1.7B; 下载后修改 config.sidreasoner 中�
 make install-vllm          # 思考模式评估需要
 
 # 1) Stage 1 & 2
-make games-sidreasoner-sft             # Stage 1: 增强式 SID-语言对齐 SFT
-make games-sidreasoner-activation      # Stage 2: 推理激活 SFT
+make games-sidreasoner-sft               # Stage 1: 增强式 SID-语言对齐 SFT
+make games-sidreasoner-activation        # Stage 2: 推理激活 SFT
 make games-sidreasoner-sft-gem
-make games-sidreasoner-activation-gem  # 默认接 Stage 1 GEM 的 final_checkpoint
+make games-sidreasoner-activation-gem    # 默认接 Stage 1 GEM 的 final_checkpoint
 
 # 2) Stage 3
-make games-sidreasoner-rl              # Stage 3: GRPO 强化学习(前置见下)
-make games-sidreasoner-rl-beam         # Stage 3 变体: OneRec-Think Rollout-Beam reward(见下)
-make games-sidreasoner-rl-beam-div     # Stage 3 变体: Rollout-Beam x OneReason R_div(见下)
-make games-sidreasoner-user-embed      # 跨 Query 多样性奖励的离线 User Embedding(一次性)
-make games-sidreasoner-rl-bleu         # StepRule + BLEU 多样性(加法合并)
-make games-sidreasoner-rl-ngram        # StepRule + n-gram 多样性(加法合并)
-make games-sidreasoner-rl-beam-bleu    # Rollout-Beam + BLEU 多样性(加法合并)
-make games-sidreasoner-rl-beam-ngram   # Rollout-Beam + n-gram 多样性(加法合并)
+make games-sidreasoner-rl                # Stage 3: GRPO 强化学习(前置见下)
+make games-sidreasoner-rl-beam           # Stage 3 变体: OneRec-Think Rollout-Beam reward(见下)
+make games-sidreasoner-rl-beam-div       # Stage 3 变体: Rollout-Beam x OneReason R_div(见下)
+make games-sidreasoner-user-embed        # 跨 Query 多样性奖励的离线 User Embedding(一次性)
+
+make games-sidreasoner-rl-bleu           # StepRule + BLEU 多样性(加法合并)
+make games-sidreasoner-rl-ngram          # StepRule + n-gram 多样性(加法合并)
+make games-sidreasoner-rl-beam-bleu      # Rollout-Beam + BLEU 多样性(加法合并)
+make games-sidreasoner-rl-beam-ngram     # Rollout-Beam + n-gram 多样性(加法合并)
+
+make games-sidreasoner-rl-beam-llmjudge  # Rollout-Beam + LLM-AS-A-JUDGE(加法合并)
+
 # 通用入口(CORR=steprule|beam|beam-div, DIV=bleu|ngram|none, COMBINE=add|mul):
 #   make games-sidreasoner-rl-div CORR=beam DIV=ngram COMBINE=mul
 
 # 挂 tmux 跑:
 make tmux TARGET=games-sidreasoner-sft SESSION=sft-games
-make tmux TARGET=games-sidreasoner-sft-gem SESSION=sft-gem-games
-make tmux TARGET=games-sidreasoner-activation-gem SESSION=act-gem-games
-
-make tmux TARGET=games-sidreasoner-rl-beam SESSION=rl-beam-games
-make tmux TARGET=games-sidreasoner-rl-beam-div SESSION=rl-beam-div-games
-make tmux TARGET=games-sidreasoner-rl-bleu SESSION=rl-bleu-games
-make tmux TARGET=games-sidreasoner-rl-ngram SESSION=rl-ngram-games
 
 tmux ls                                # 1. 列出服务器上仍在跑的会话
 tmux attach -t sft                     # 2. 接回对应会话(Ctrl-b d 只退出查看, 不停任务)
@@ -83,13 +80,14 @@ make games-sidreasoner-merge RL_SUFFIX=_steprule_bleu
 make games-sidreasoner-merge RL_SUFFIX=_steprule_ngram
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_bleu
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_ngram
+make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_llmjudge
 
 # 4) 思考模式评估 & 计算指标 & 画图
 make games-sidreasoner-think \
     MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B/global_step_100/actor_merged
 make games-sidreasoner-metrics         # 自动取最新 think 结果, 可用 RESULT=xxx.json 指定
 make games-sidreasoner-curves          # 默认画全部: NDCG@5/10, HR@5/10
-make games-sidreasoner-reward-curves  # Stage 3 reward 组成曲线(正确性/多样性/总 reward)
+make games-sidreasoner-reward-curves   # Stage 3 reward 组成曲线(正确性/多样性/总 reward)
 make games-sidreasoner-curves ARGS="--metric NDCG@10"
 
 # 非思考模式: MODEL 取 stage1 / stage2 / 任意 checkpoint 路径
@@ -161,8 +159,9 @@ make games-sidreasoner-rl-beam         # Rollout-Beam: CoT 后 beam K 个候选�
 make games-sidreasoner-rl-beam-div     # 再乘 OneReason R_div(候选首层 code 去重度)
 make games-sidreasoner-user-embed      # (bleu 前置)SASRec 用户向量离线缓存 -> runs/sidreasoner/user_embed/
 make games-sidreasoner-rl-bleu         # 跨 Query CoT 多样性: R + lambda*I*clip(gamma^T*TD, 0, sigma)
+make games-sidreasoner-rl-beam-llmjudge  # 同上, TD = 1 - LLM-Judge 语义相似度(见下)
 make games-sidreasoner-reward-probe    # reward 组内区分度探针: 采样一个 batch, 逐组报告 reward 分解
-                                       # ARGS="--n-queries 32 --rollout-n 8 --reward bleu|steprule|custom ..."
+                                       # ARGS="--n-queries 32 --rollout-n 8 --reward bleu|ngram|llmjudge|steprule|custom ..."
 
 # 评估(目录名对应 think_rolloutbeam / think_rolloutbeam_div / think_bleu)
 make games-sidreasoner-think MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam/global_step_100/actor_merged
@@ -174,11 +173,41 @@ make games-sidreasoner-think MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage
 - beam 参数: `rl.sid_beam_size`(K, >1)/ `sid_length`(L); beam-div 另有
   `reward_kwargs.div_level`(默认 1 = 首层); beam 集中导致 R_div 全零时增大 K。
 - 多样性变体: 正确性 reward(StepRule / Rollout-Beam)与多样性 reward(BLEU /
-  n-gram)解耦, 通过 `COMBINE=add|mul` 合并; 参数在 `rl.inter_query_diversity`,
-  详见 `docs/sidreasoner_inter_query_diversity.md`; 默认关闭, 不影响其他 target。
+  n-gram / LLM-Judge)解耦, 通过 `COMBINE=add|mul` 合并; 参数在
+  `rl.inter_query_diversity`, 详见 `docs/sidreasoner_inter_query_diversity.md`;
+  默认关闭, 不影响其他 target。
 - 自定义奖励: 继承 `BaseSidReward` 注册到 `src/reward/sid_rewards/`(见
   `tests/test_sid_rewards.py`), `reward_kwargs.reward_type` 显式指定即可,
   无需改 trainer。单测: `.venv/bin/python -m pytest tests/ -v`。
+
+## LLM-Judge 多样性 reward
+
+TD 度量换成 LLM-as-a-Judge: judge 看双方用户历史, 对两条 CoT 的
+evidence / strategy / profile 三个维度各评 0-4 相似度, `sim = mean/4`,
+`TD = 1 - sim`。其余(DIVER 塑形/门控/合并)与 BLEU 版一致。
+
+```bash
+# 1) 启动 judge 服务(单独一张卡; 端口/模型名与 config 的 judge_* 对齐)
+vllm serve ../Qwen3-1.7B --served-model-name Qwen3-1.7B --port 8000
+
+# 2) 离线用户向量(若已生成可跳过)
+make games-sidreasoner-user-embed
+
+# 3) 元评测: 先看真实 CoT 对的逐维打分, 再决定是否开训
+#    (输出 results/reward_probe/..._llmjudge_probe.json -> judge_pairs)
+make games-sidreasoner-reward-probe ARGS="--reward llmjudge --judge-meta 40 --rollout-n 8"
+
+# 4) Stage 3 RL(Rollout-Beam x LLM-Judge 多样性)
+make games-sidreasoner-rl-beam-llmjudge
+```
+
+- 仅支持 vLLM OpenAI 兼容服务(`/v1/chat/completions`); judge 请求关闭
+  thinking(`enable_thinking=false`), temperature=0。
+- `JUDGE_URL` / `JUDGE_MODEL` / `JUDGE_CONCURRENCY` 环境变量可覆盖
+  `config/sidreasoner.py` 的 `rl.inter_query_diversity.judge_*`。
+- judge 解析失败按全维 2 分回退, 训练日志 `judge_calls` / `judge_fallback`
+  记录调用量与回退量。
+- 冒烟(小 batch): `make games-sidreasoner-reward-probe ARGS="--reward llmjudge --judge-meta 8 --n-queries 4 --rollout-n 2"`。
 
 # 4. 自建 SID(独立训练 RQ-VAE)
 

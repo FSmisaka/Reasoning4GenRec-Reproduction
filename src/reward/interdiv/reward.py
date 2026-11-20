@@ -28,6 +28,7 @@ import numpy as np
 
 from .bleu import DiverBleu
 from .cot_utils import extract_cot, recommendation_match
+from .llmjudge import HistoryLookup, LLMJudge, render_block
 from .neighbor import build_same_user_mask, topk_neighbors
 from .shaping import lambda_at, rank_normalize, shape_rewards
 from .similarity import NgramJaccard
@@ -65,6 +66,9 @@ class InterQueryDiversityAddon:
         similarity: str = "bleu",
         ngram_n: int = 1,
         combine: str = "add",
+        judge_base_url: str = "http://localhost:8000/v1",
+        judge_model: str = "Qwen3-1.7B",
+        judge_concurrency: int = 32,
     ):
         """device 仅用于 BxB 邻居矩阵乘, 默认 cpu: reward 在 verl driver
         进程执行, 默认用 cuda 会在 colocated GPU 上建 context 挤占显存。
@@ -83,8 +87,12 @@ class InterQueryDiversityAddon:
             秩归一化保证组内区分度由 λ·σ 直接控制(均值固定, 无常数平移)。
         similarity: 多样性度量。"bleu" = SymBLEU(DIVER 官方口径, 含
             bleu_smoothing 选项); "ngram_jaccard" = 1 - n-gram 集合
-            Jaccard(|G_n(a)∩G_n(b)| / |G_n(a)∪G_n(b)|)。
+            Jaccard(|G_n(a)∩G_n(b)| / |G_n(a)∪G_n(b)|); "llmjudge" =
+            LLM-as-a-Judge 语义相似度(见 llmjudge.py, 需先起 vLLM 服务,
+            judge 可见双方用户历史)。
         ngram_n: ngram_jaccard 的 n(默认 1)。
+        judge_base_url / judge_model / judge_concurrency: llmjudge 的
+            OpenAI 兼容服务地址 / served model 名 / 并发上限。
         combine: 正确性 x 多样性合并方式("add" 加法塑形 / "mul" 乘法:
             R' = R * (1 + intrinsic))。
         """
@@ -98,9 +106,18 @@ class InterQueryDiversityAddon:
             )
         elif self.similarity == "ngram_jaccard":
             self.scorer = NgramJaccard(n=int(ngram_n), div_len=int(bleu_div_len))
+        elif self.similarity == "llmjudge":
+            self.scorer = LLMJudge(
+                base_url=judge_base_url,
+                model=judge_model,
+                concurrency=int(judge_concurrency),
+            )
+            data_dir = self.store.meta.get("data_dir", "")
+            data_root = os.path.dirname(os.path.dirname(data_dir))
+            self.history = HistoryLookup(data_root, self.store.meta["category"])
         else:
             raise ValueError(
-                f"未知 similarity: {similarity!r}(bleu | ngram_jaccard)"
+                f"未知 similarity: {similarity!r}(bleu | ngram_jaccard | llmjudge)"
             )
         self.success_mode = str(success_mode)
         if self.success_mode not in ("full", "prefix", "none"):
@@ -285,10 +302,12 @@ class InterQueryDiversityAddon:
         }
 
         # ---- 逐 query 逐 rollout 计算跨用户 TD ----
+        llm = self.similarity == "llmjudge"
         sim_np = neighbor_sim.numpy()
         sims_finite = sim_np[np.isfinite(sim_np)]
         td_values = np.zeros(n, dtype=np.float64)
         valid_neighbor_counts = []
+        refs_by_query = []
         for q_i in range(len(train_keys)):
             valid_refs: list = []
             for slot in range(neighbor_idx.shape[1]):
@@ -297,22 +316,50 @@ class InterQueryDiversityAddon:
                     continue
                 ref = references.get(nb)
                 if ref is not None:
-                    valid_refs.append(ref)
+                    # llmjudge: 渲染成带邻居用户历史的块
+                    valid_refs.append(
+                        render_block(self.history.lines(*train_keys[nb]), ref)
+                        if llm
+                        else ref
+                    )
+            refs_by_query.append(valid_refs)
             valid_neighbor_counts.append(len(valid_refs))
             for r in groups[train_keys[q_i]]:
                 results[r]["n_refs"] = len(valid_refs)
-            if not valid_refs:
-                continue
-            for r in groups[train_keys[q_i]]:
-                cot = cots[r]
-                if cot is None or len(cot.split()) < _MIN_COT_TOKENS:
+
+        if llm:
+            # 全 batch 的 (rollout, reference) 对一次性提交, 吃满 judge 并发
+            jobs, pairs = [], []
+            for q_i in range(len(train_keys)):
+                if not refs_by_query[q_i]:
                     continue
-                d = float(
-                    np.mean(
-                        [self.scorer.diversity(cot, ref) for ref in valid_refs]
+                hist_lines = self.history.lines(*train_keys[q_i])
+                for r in groups[train_keys[q_i]]:
+                    cot = cots[r]
+                    if cot is None or len(cot.split()) < _MIN_COT_TOKENS:
+                        continue
+                    start = len(pairs)
+                    pairs.extend(
+                        (render_block(hist_lines, cot), ref)
+                        for ref in refs_by_query[q_i]
                     )
-                )
-                td_values[r] = d
+                    jobs.append((r, len(refs_by_query[q_i]), start))
+            sims = self.scorer.similarities(pairs) if pairs else []
+            for r, k, start in jobs:
+                td_values[r] = float(np.mean([1.0 - s for s in sims[start : start + k]]))
+        else:
+            for q_i in range(len(train_keys)):
+                if not refs_by_query[q_i]:
+                    continue
+                for r in groups[train_keys[q_i]]:
+                    cot = cots[r]
+                    if cot is None or len(cot.split()) < _MIN_COT_TOKENS:
+                        continue
+                    td_values[r] = float(
+                        np.mean(
+                            [self.scorer.diversity(cot, ref) for ref in refs_by_query[q_i]]
+                        )
+                    )
 
         # 保留原始 TD 供回报/诊断(intrinsic 用可能归一化后的值)
         td_raw = td_values.copy()
@@ -429,6 +476,8 @@ class InterQueryDiversityAddon:
             "td_success_mean": float(np.mean(td[success])) if success.any() else 0.0,
             "neighbor_sim_mean": m["neighbor_sim_mean"],
             "valid_neighbors_mean": m["valid_neighbors_mean"],
+            "judge_calls": getattr(self.scorer, "n_calls", None),
+            "judge_fallback": getattr(self.scorer, "n_fallback", None),
             "elapsed_s": round(m["elapsed"], 3),
         }
         os.makedirs(os.path.dirname(os.path.abspath(self.metrics_path)) or ".", exist_ok=True)

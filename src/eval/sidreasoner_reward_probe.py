@@ -6,11 +6,14 @@
 
 复用方式(对后续任何新 reward 通用):
 1. preset: --reward bleu(默认, 跨 Query 多样性)/ ngram(同上的 n-gram
-   Jaccard 度量, 与 rl_ngram.sh 一致)/ steprule(论文原版);
+   Jaccard 度量, 与 rl_ngram.sh 一致)/ llmjudge(LLM-as-a-Judge 语义相似度,
+   与 rl_beam_llmjudge.sh 一致)/ steprule(论文原版);
 2. custom: --reward custom --reward-entry <入口.py> --reward-name <函数名>
    [--reward-kwargs k=v ...] [--per-row](逐行 naive API);
 3. --batch-json <旧探针输出>: 复用上次生成的 batch, 只换 reward 重跑,
-   不再重复生成(新 reward 对比实验的推荐用法)。
+   不再重复生成(新 reward 对比实验的推荐用法);
+4. --judge-meta N: LLM-Judge 元评测。组内/跨用户各抽样 CoT 对, 记录
+   judge 的逐维打分与相似度, 写入 payload["judge_pairs"](含历史与原文)。
 
 输出(默认 results/reward_probe/<Category>_stage3_rl_<label>_probe.json,
 命名对齐 Stage 3 实验名后缀): meta / summary(组内区分度统计) /
@@ -370,7 +373,7 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
     """返回 (entry_path, fn_name, kwargs, per_row)。"""
     iqd = cfg["rl"].get("inter_query_diversity", {}) or {}
     category = resolve_category(cfg["data"])
-    if preset in ("bleu", "ngram"):
+    if preset in ("bleu", "ngram", "llmjudge"):
         enc = iqd.get("user_encoder_type", "sasrec")
         emb = iqd.get("user_embedding_path") or os.path.join(
             "runs", "sidreasoner", "user_embed", f"{category}_{enc}.npz"
@@ -391,13 +394,16 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             "reference_mode": iqd.get("reference_mode", "full"),
             "bleu_smoothing": iqd.get("bleu_smoothing", "none"),
             "td_norm": iqd.get("td_norm", "none"),
-            # ngram preset 强制 ngram_jaccard(与 rl_ngram.sh 一致);
-            # bleu preset 按 config(与 rl-bleu 一致, 便于跟随训练配置)
+            # ngram/llmjudge preset 强制对应度量(与 rl_ngram.sh / rl_beam_llmjudge.sh
+            # 一致); bleu preset 按 config(与 rl-bleu 一致, 便于跟随训练配置)
             "similarity": (
-                "ngram_jaccard" if preset == "ngram"
-                else iqd.get("similarity", "bleu")
+                {"ngram": "ngram_jaccard", "llmjudge": "llmjudge"}.get(preset)
+                or iqd.get("similarity", "bleu")
             ),
             "ngram_n": iqd.get("ngram_n", 1),
+            "judge_base_url": iqd.get("judge_base_url", "http://localhost:8000/v1"),
+            "judge_model": iqd.get("judge_model", "Qwen3-1.7B"),
+            "judge_concurrency": iqd.get("judge_concurrency", 32),
             # 探针的 interdiv 日志独立落盘, 不污染训练的 interdiv_metrics.jsonl
             "metrics_path": os.path.join(out_dir, "interdiv_probe_metrics.jsonl"),
         }
@@ -440,6 +446,80 @@ def parse_kv(pairs: list) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# LLM-Judge 元评测: 抽样 CoT 对, 记录 judge 的逐维打分
+# --------------------------------------------------------------------------- #
+
+
+def judge_meta_eval(rows: list, n_pairs: int, judge, history, seed: int = 0) -> dict:
+    """组内 / 跨用户各半抽样 CoT 对, 返回逐对逐维打分与汇总。"""
+    from src.reward.interdiv.cot_utils import extract_cot
+    from src.reward.interdiv.llmjudge import render_block
+
+    cots = {i: extract_cot(r["solution_str"]) for i, r in enumerate(rows)}
+    usable = {
+        k: [i for i in idxs if cots[i] and len(cots[i].split()) >= 5]
+        for k, idxs in group_rows(rows).items()
+    }
+    usable = {k: v for k, v in usable.items() if v}
+    keys = list(usable)
+    rng = random.Random(seed)
+
+    pairs = []
+    for k in keys:  # 组内(同 query 不同 rollout)
+        if len(usable[k]) >= 2:
+            i, j = rng.sample(usable[k], 2)
+            pairs.append(("within_user", k, k, i, j))
+    for _ in range(len(pairs)):  # 跨用户
+        if len(keys) < 2:
+            break
+        ka, kb = rng.sample(keys, 2)
+        pairs.append(
+            ("cross_user", ka, kb, rng.choice(usable[ka]), rng.choice(usable[kb]))
+        )
+    rng.shuffle(pairs)
+    pairs = pairs[: int(n_pairs)]
+    if not pairs:
+        return {"pairs": [], "summary": None}
+
+    def block(key, i):
+        return render_block(history.lines(*key), cots[i])
+
+    scores = judge.judge_pairs(
+        [(block(ka, i), block(kb, j)) for _, ka, kb, i, j in pairs]
+    )
+    records = []
+    for (kind, ka, kb, i, j), s in zip(pairs, scores):
+        sim = sum(s.values()) / (4.0 * len(s))
+        records.append(
+            {
+                "type": kind,
+                "query_a": {"split": ka[0], "index": ka[1]},
+                "query_b": {"split": kb[0], "index": kb[1]},
+                "history_a": history.lines(*ka),
+                "history_b": history.lines(*kb),
+                "cot_a": cots[i],
+                "cot_b": cots[j],
+                "scores": s,
+                "similarity": sim,
+                "diversity": 1.0 - sim,
+            }
+        )
+    summary = {}
+    for kind in ("within_user", "cross_user"):
+        ss = [r for r in records if r["type"] == kind]
+        if ss:
+            summary[kind] = {
+                "n": len(ss),
+                "mean_similarity": float(np.mean([r["similarity"] for r in ss])),
+                **{
+                    f"mean_{k}": float(np.mean([r["scores"][k] for r in ss]))
+                    for k in ss[0]["scores"]
+                },
+            }
+    return {"pairs": records, "summary": summary}
+
+
+# --------------------------------------------------------------------------- #
 # 主流程
 # --------------------------------------------------------------------------- #
 
@@ -447,7 +527,8 @@ def parse_kv(pairs: list) -> dict:
 def main(argv=None, cfg=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--reward", default="bleu", help="preset: bleu | ngram | steprule | custom"
+        "--reward", default="bleu",
+        help="preset: bleu | ngram | llmjudge | steprule | custom",
     )
     parser.add_argument("--reward-entry", default=None, help="custom: reward 入口 .py 路径")
     parser.add_argument("--reward-name", default="rule_base_reward", help="custom: 入口函数名")
@@ -466,6 +547,10 @@ def main(argv=None, cfg=None):
     parser.add_argument("--max-tokens", type=int, default=1024)
     parser.add_argument("--gpu-mem", type=float, default=0.6)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--judge-meta", type=int, default=0,
+        help="LLM-Judge 元评测: 抽样 N 个 CoT 对, 记录逐维打分(0=关闭)",
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
 
@@ -525,6 +610,27 @@ def main(argv=None, cfg=None):
     print(f"[probe] reward: {os.path.basename(entry)}::{name} per_row={per_row}")
     results = call_reward(fn, rows, per_row=per_row, kwargs=kwargs)
 
+    # ---- LLM-Judge 元评测(可选) ----
+    judge_pairs = {"pairs": [], "summary": None}
+    if args.judge_meta > 0:
+        from src.reward.interdiv.llmjudge import HistoryLookup, LLMJudge
+
+        iqd = cfg["rl"].get("inter_query_diversity", {}) or {}
+        judge = LLMJudge(
+            base_url=iqd.get("judge_base_url", "http://localhost:8000/v1"),
+            model=iqd.get("judge_model", "Qwen3-1.7B"),
+            concurrency=iqd.get("judge_concurrency", 32),
+        )
+        history = HistoryLookup(cfg["data"]["root"], category)
+        judge_pairs = judge_meta_eval(rows, args.judge_meta, judge, history, args.seed)
+        for kind, st in (judge_pairs["summary"] or {}).items():
+            print(
+                f"[probe] judge {kind}: n={st['n']} sim={st['mean_similarity']:.3f} "
+                f"evidence={st['mean_evidence']:.2f} "
+                f"strategy={st['mean_strategy']:.2f} "
+                f"profile={st['mean_profile']:.2f}"
+            )
+
     # ---- 汇总 & 落盘 ----
     report = aggregate(rows, results)
     payload = {
@@ -541,6 +647,7 @@ def main(argv=None, cfg=None):
         },
         "summary": report["summary"],
         "groups": report["groups"],
+        "judge_pairs": judge_pairs,
         "batch": {"rows": _jsonable(rows)},
     }
     with open(out_path, "w") as f:

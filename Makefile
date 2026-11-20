@@ -61,6 +61,7 @@ endif
 	games-sidreasoner-rl-ngram office-sidreasoner-rl-ngram industrial-sidreasoner-rl-ngram \
 	games-sidreasoner-rl-beam-bleu office-sidreasoner-rl-beam-bleu industrial-sidreasoner-rl-beam-bleu \
 	games-sidreasoner-rl-beam-ngram office-sidreasoner-rl-beam-ngram industrial-sidreasoner-rl-beam-ngram \
+	games-sidreasoner-rl-beam-llmjudge office-sidreasoner-rl-beam-llmjudge industrial-sidreasoner-rl-beam-llmjudge \
 	games-sidreasoner-rl-div office-sidreasoner-rl-div industrial-sidreasoner-rl-div \
 	games-sidreasoner-user-embed office-sidreasoner-user-embed industrial-sidreasoner-user-embed \
 	games-sidreasoner-reward-probe office-sidreasoner-reward-probe industrial-sidreasoner-reward-probe \
@@ -258,6 +259,9 @@ $(eval $(call SIDREASONER_TARGET_BEAM_DIV,industrial,bleu,rl-beam-bleu))
 $(eval $(call SIDREASONER_TARGET_BEAM_DIV,games,ngram,rl-beam-ngram))
 $(eval $(call SIDREASONER_TARGET_BEAM_DIV,office,ngram,rl-beam-ngram))
 $(eval $(call SIDREASONER_TARGET_BEAM_DIV,industrial,ngram,rl-beam-ngram))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,games,llmjudge,rl-beam-llmjudge))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,office,llmjudge,rl-beam-llmjudge))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,industrial,llmjudge,rl-beam-llmjudge))
 
 # Stage 3 RL 通用入口: CORR=steprule|beam|beam-div, DIV=bleu|ngram|none,
 # COMBINE=add|mul(默认取 config); 例:

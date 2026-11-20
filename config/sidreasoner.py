@@ -204,8 +204,8 @@ CONFIG: Dict[str, Any] = {
             "user_embedding_path": None,    # 默认 runs/sidreasoner/user_embed/<Category>_<encoder>.npz
             "top_k_neighbors": 8,           # in-batch 相似用户数 K
             "same_user_jaccard": 0.8,       # 历史物品集合 Jaccard >= 该值视为同一用户(排除)
-            "lambda_init": 0.2,             # 多样性奖励初始权重
-            "lambda_final": 0.0,            # 最终权重(线性衰减)
+            "lambda_init": 0.8,             # 多样性奖励初始权重
+            "lambda_final": 0.8,            # 最终权重(线性衰减)
             "decay_steps": 300,             # 权重衰减步数(train batch 数)
             "gamma": 1.0,                   # 折扣因子(默认 1.0 = 不折扣; <1 需 model_path tokenizer)
             "sigma": 1,                   # intrinsic 裁剪上界
@@ -230,10 +230,15 @@ CONFIG: Dict[str, Any] = {
             "td_norm": "rank",
             # similarity: 多样性度量。bleu = SymBLEU(DIVER 官方口径, 受
             #   bleu_smoothing 影响); ngram_jaccard = 1 - |G_n(a)∩G_n(b)| /
-            #   |G_n(a)∪G_n(b)|(n-gram 集合 Jaccard)。rl_ngram.sh /
-            #   INTER_DIV_METRIC=ngram 会强制覆盖为 ngram_jaccard。
+            #   |G_n(a)∪G_n(b)|(n-gram 集合 Jaccard); llmjudge = LLM-as-a-Judge
+            #   语义相似度(逐维 0-4, judge 可见双方用户历史)。rl_ngram.sh /
+            #   INTER_DIV_METRIC=ngram|llmjudge 会强制覆盖。
             "similarity": "bleu",
             "ngram_n": 2,                   # ngram_jaccard 的 n 阶数
+            # ---- 以下仅 llmjudge 使用(需先起 vLLM 服务, 见 README) ----
+            "judge_base_url": "http://localhost:8000/v1",
+            "judge_model": "Qwen3-1.7B",   # vllm serve ../Qwen3-1.7B --served-model-name Qwen3-1.7B
+            "judge_concurrency": 32,        # judge 并发请求上限
             # combine: 正确性 x 多样性合并方式。add = R + intrinsic(DIVER
             #   塑形); mul = R * (1 + intrinsic)(多样性按比例放大正确性
             #   reward, R=0 不获得加成)。CORR/DIV/COMBINE 环境变量可覆盖。
@@ -263,7 +268,7 @@ CONFIG: Dict[str, Any] = {
         # think_temperature > 0 时 CoT 用采样解码(vLLM per-request seed 可复现),
         # 并按 eval_seeds 逐 seed 评测后报告均值/标准差/95% 置信区间;
         # 0.0 保持原贪心解码行为(单 seed, 输出文件名不带 _seed 后缀)。
-        "think_temperature": 1.5,
+        "think_temperature": 0.0,
         "think_top_p": 0.95,
         "eval_seeds": [42, 43, 44, 45, 46],
         "ci_level": 0.95,
