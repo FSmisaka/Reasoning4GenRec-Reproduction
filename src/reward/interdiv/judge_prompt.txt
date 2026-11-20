@@ -4,70 +4,37 @@ You are an expert evaluator of reasoning traces for sequential recommendation.
 
 You will compare two reasoning traces written by a recommendation model. Each
 trace argues its way toward a next-item recommendation for one user, given that
-user's interaction history.
+user's interaction history. The two users are different people, so the traces
+discuss different items. Compare how each trace reasons about its own user's
+history, not the items or words themselves.
 
-Score how similar the two traces are as reasoning, not as text. The two users
-are different people, so the traces will discuss different items. Compare how
-each trace reasons about its own user's history, not the items or words
-themselves.
-
-Score three dimensions independently on an integer 0-4 scale. Higher scores
-mean the reasoning is more alike:
+Score three dimensions, each an integer from 0 to 4. Higher scores mean the
+reasoning is more alike:
 4 almost identical, 3 strong similarity, 2 moderate similarity,
 1 very little similarity, 0 completely different.
 
-## Input
-
-- USER A HISTORY: items user A interacted with, oldest first, one per line as
-  `SID - title`.
-- TRACE A: user A's reasoning trace.
-- USER B HISTORY: same, for user B.
-- TRACE B: user B's reasoning trace.
-
-Traces refer to items by SID only, in the form `<a_45><b_88><c_206>`. Use each
-history as the lookup table for which item a mentioned SID names. If a trace
-cites an SID absent from its user's history, mention it in "note" and score
-the dimensions on the rest.
-
-<USER_HISTORY_A>
-{{history_a}}
-</USER_HISTORY_A>
-
-<COT_A>
-{{cot_a}}
-</COT_A>
-
-<USER_HISTORY_B>
-{{history_b}}
-</USER_HISTORY_B>
-
-<COT_B>
-{{cot_b}}
-</COT_B>
-
 ## Ground rules
 
-1. Judge the reasoning, not the wording. Differences in phrasing, sentence
-   structure, length, or order do not affect scores. Two traces that make the
-   same argument in different words are identical for your purposes.
-2. The users differ, so the traces cite different items. That alone does not
-   make the reasoning different. For every dimension the question is the same:
-   does each trace do the same thing with its own user's history?
+1. Judge the reasoning, not the wording. Phrasing, sentence structure, length,
+   and order count for nothing. Two traces that make the same argument in
+   different words are identical for your purposes.
+2. Different items do not make different reasoning. For every dimension the
+   question is: does each trace do the same thing with its own user's history?
 3. One common pattern, whatever the domain: recite recent items, group them
    under one category or theme, note a recurring attribute, conclude the user
    is loyal to it, predict more of it. When both traces follow this skeleton,
    they are similar even though the items differ.
 4. Histories differ in length, and a short history forces a short trace. Score
    the pattern each trace applies, not the amount of material it had.
-5. Score each dimension independently. Two traces may infer different
+5. Score the three dimensions independently. Two traces may infer different
    preferences while sharing a strategy, or share a profile claim while using
    different evidence.
 6. Ignore unsupported speculation and fabricated evidence. Ignore verbosity
    and repetition. Do not judge recommendation accuracy.
 7. When a trace is too vague to tell, be conservative: missing detail alone is
    not a distinct approach. Score near the middle of the scale.
-8. Evidence first. For every dimension, quote the phrase in each trace that
-   drove your score, then give the score.
+8. Before scoring a dimension, re-read the phrases in both traces that drive
+   it, and score from those phrases. Do not output the phrases.
 
 ## Dimensions
 
@@ -101,24 +68,16 @@ with one shared element.
 
 ## Output
 
-Reply with JSON only, no other text. Scores are integers from 0 to 4. Quotes
-are one short phrase per trace, or "" when the dimension has no evidence in a
-trace. Do not compute an overall score; it is calculated externally.
+Reply with that exact JSON on a single line, nothing before or after it. Do not
+compute an overall score; it is calculated externally. Do not add any other
+key. Scores are integers from 0 to 4.
 
-{
-  "evidence": {"score": 4, "quote_a": "...", "quote_b": "..."},
-  "strategy": {"score": 4, "quote_a": "...", "quote_b": "..."},
-  "profile":  {"score": 3, "quote_a": "...", "quote_b": "..."},
-  "note": ""
-}
-
-If either trace is empty, cut off mid-sentence, or not about recommending an
-item, reply {"valid": false} and no scores.
+{"evidence": 4, "strategy": 4, "profile": 3}
 
 ## Examples
 
 Traces below are condensed; real traces run longer. Length has no effect on
-any score.
+any score. These examples illustrate scoring only, never copy from them.
 
 ### Example 1: same skeleton, different users
 
@@ -173,3 +132,25 @@ Scores: evidence 2, strategy 3, profile 3. Both key on category and read the
 history in aggregate. A adds a platform shift as evidence and conditions the
 prediction on the newer console; B stops at category. Same core induction, one
 distinct element.
+
+## Input: the pair to evaluate
+
+Each history lists items oldest first, one per line, as `SID - title`. Traces
+refer to items by SID only, in the form `<a_45><b_88><c_206>`. Use each
+history as the lookup table for which item a mentioned SID names.
+
+<USER_HISTORY_A>
+{{history_a}}
+</USER_HISTORY_A>
+
+<COT_A>
+{{cot_a}}
+</COT_A>
+
+<USER_HISTORY_B>
+{{history_b}}
+</USER_HISTORY_B>
+
+<COT_B>
+{{cot_b}}
+</COT_B>

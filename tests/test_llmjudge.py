@@ -44,6 +44,22 @@ def test_parse_scores_nested_fenced_flat_clamped():
     assert parse_scores("no json here") is None
 
 
+def test_parse_scores_regex_fallback():
+    # note 复读把 JSON 撑爆, 分数在坏掉之前
+    note_loop = (
+        '{"evidence": 4, "strategy": 3, "profile": 3, "note": "Both traces infer '
+        "a preference for racing games, and the user is a racing fan, and the user"
+    )
+    assert parse_scores(note_loop) == dict(zip(K3, (4, 3, 3)))
+    # 无引号键 / 多余引号冒号
+    assert parse_scores("{ evidence: 4, strategy: 3, profile: 3 }") == dict(zip(K3, (4, 3, 3)))
+    assert parse_scores('{"evidence":": 4, "strategy": 3, "profile": 3') == dict(
+        zip(K3, (4, 3, 3))
+    )
+    # 某键的值退化为文本(无数字) -> 整体回退 None
+    assert parse_scores('{"evidence": the the the, "strategy": 3, "profile": 3}') is None
+
+
 def test_block_round_trip():
     lines = ["<a_1><b_1><c_1> - Game One", "<a_2><b_2><c_2> - Game Two"]
     block = render_block(lines, "the user likes racing")

@@ -15,10 +15,13 @@ judge 服务(需提前启动, 见 README):
 import asyncio
 import json
 import os
+import re
 
 _PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "judge_prompt.txt")
 BLOCK_SEP = "\n<<COT>>\n"
 _KEYS = ("evidence", "strategy", "profile")
+# 兜底正则: 容忍无引号键 / 多余引号冒号, 如 `{ evidence: 4` / `": 4`
+_KEY_RE = {k: re.compile(rf'["\']?{k}["\']?\s*:\s*["\']?:?\s*([0-4])') for k in _KEYS}
 
 
 def render_block(history_lines: list, cot: str) -> str:
@@ -31,21 +34,31 @@ def split_block(block: str) -> tuple:
 
 
 def parse_scores(text: str):
-    """从 judge 输出解析三个维度分(嵌套 score 或扁平整数); 失败返回 None。"""
+    """从 judge 输出解析三个维度分。
+
+    优先 JSON(raw_decode); 失败时用正则逐键兜底 —— 小模型常在 note/复读处
+    撑爆 JSON, 但三个分数几乎总在坏掉之前就已写出。任一键缺失返回 None。
+    """
     text = text or ""
     start = text.find("{")
-    if start < 0:
-        return None
-    try:
-        obj, _ = json.JSONDecoder().raw_decode(text[start:])
-        out = {}
-        for k in _KEYS:
-            v = obj[k]
-            v = v["score"] if isinstance(v, dict) else v
-            out[k] = min(4, max(0, int(v)))
-        return out
-    except (KeyError, TypeError, ValueError):
-        return None
+    if start >= 0:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(text[start:])
+            out = {}
+            for k in _KEYS:
+                v = obj[k]
+                v = v["score"] if isinstance(v, dict) else v
+                out[k] = min(4, max(0, int(v)))
+            return out
+        except (KeyError, TypeError, ValueError):
+            pass
+    out = {}
+    for k in _KEYS:
+        m = _KEY_RE[k].search(text)
+        if not m:
+            return None
+        out[k] = int(m.group(1))
+    return out
 
 
 class HistoryLookup:
@@ -99,7 +112,7 @@ class LLMJudge:
         prompt_path: str = _PROMPT_PATH,
         concurrency: int = 32,
         temperature: float = 0.0,
-        max_tokens: int = 256,
+        max_tokens: int = 64,
     ):
         self.base_url = base_url
         self.model = model
