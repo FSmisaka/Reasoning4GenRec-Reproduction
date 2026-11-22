@@ -132,6 +132,10 @@ def _get_addon(kwargs: dict):
             niche_embed_model=kwargs.get("niche_embed_model"),
             niche_embed_device=str(kwargs.get("niche_embed_device", "cpu")),
             niche_embed_batch_size=int(kwargs.get("niche_embed_batch_size", 64)),
+            niche_embed_num_threads=int(
+                kwargs.get("niche_embed_num_threads", 8) or 0
+            ),
+            niche_only_success=_bool(kwargs.get("niche_only_success"), True),
         )
     return _ADDON
 

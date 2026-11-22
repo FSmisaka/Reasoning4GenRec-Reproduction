@@ -425,12 +425,26 @@ make games-sidreasoner-rl-beam-niche    # 产物 ..._Qwen3-1.7B_rolloutbeam_nich
 make games-sidreasoner-reward-probe ARGS="--reward niche"
 ```
 
-配置(`config/sidreasoner.py` 的 `rl.inter_query_diversity`): `niche_dict_path`
-/ `niche_lexstats_path` / `niche_sif_path`(默认 `<root>/niche/<Category>/...`)、
-`niche_summary_method`(sif|tfidf)、`niche_embed_model`(c2 句向量; 默认解析
-顺序 = config 值 > `NICHE_BGE_MODEL` 环境变量 > `BAAI/bge-base-en-v1.5`,
-**离线/内网可填本地模型目录**, 与预处理共用)、`niche_embed_device`(默认 cpu,
-reward 在 driver 端执行)、`niche_embed_batch_size`。
+配置(`config/sidreasoner.py` 的 `rl.inter_query_diversity`, **全部参数走
+config, 不需要 export 环境变量**): `niche_dict_path` / `niche_lexstats_path`
+/ `niche_sif_path`(默认 `<root>/niche/<Category>/...`)、
+`niche_summary_method`(sif|tfidf)、`niche_embed_model`(**直接填本地模型目录
+即可离线**, 与预处理共用)、`niche_embed_device`(默认 cpu, reward 在 driver
+端执行)、`niche_embed_batch_size`(句向量批大小)、
+`niche_embed_num_threads`(CPU 推理 torch 线程数; Ray 会给 driver 设
+`OMP_NUM_THREADS=1`, 不覆盖时 BGE 会慢 ~10 倍, 建议≈物理核数)、
+`niche_only_success`(默认 True: 只对能拿到 intrinsic 的成功 rollout 计算
+c1/c2/c3 —— 失败行 intrinsic 恒 0, 训练数学不变, 低成功率阶段可省 ~90%
+的 BGE 计算; 关掉则失败行也计算, td 诊断覆盖全部 rollout)。
+
+### 性能说明
+
+单 batch 的主要成本是 c2 的 BGE 句向量编码(CPU, 批内去重 + 进程级缓存)。
+实测首步曾达 ~700s, 原因是 Ray driver 的 `OMP_NUM_THREADS=1`;
+`niche_embed_num_threads` 设为物理核数后可降一个数量级。另两个开关:
+`niche_only_success`(默认开, 成功率 ~10% 时只编码约 1/10 的 rollout)与
+`niche_embed_device="cuda"`(更快, 但 driver 与训练共用 GPU, 需留意显存)。
+c1/c3 均为纯 Python/numpy, 开销可忽略。
 
 ### 诊断指标
 
@@ -438,6 +452,8 @@ JSONL 逐 batch 追加 `niche/c1_mean|c2_mean|c3_mean`(分量均值)、
 `niche/c1_defined_frac|c2_defined_frac|c3_defined_frac`(**可计算率**,
 区分结构性 0 与真实低分)、`niche/hist_niche_mean`、`niche/n_scored`;
 逐 rollout 的 reward_extra_info 含 `niche_c1/c2/c3` 与 defined 标志。
+注意开着 `niche_only_success`(默认)时, 失败行的 `td` 与 `niche_*`
+恒为 0(它们本来也拿不到 intrinsic), 看诊断请用 `td_ok`(`td_success_mean`)。
 
 实测口径(Video_Games SFT CoT + tfidf 变体, 200 行抽样): c1 可计算 73%
 (历史含 niche 物品的行占比), c2 可计算 ~19%(mixed 句剔除后同时有两种
@@ -451,6 +467,7 @@ JSONL 逐 batch 追加 `niche/c1_mean|c2_mean|c3_mean`(分量均值)、
   (跨用户模板收敛, 与用户间多样性目标偏离); lambda 衰减 + sigma clip +
   三项平均可限制影响, 建议监控不同用户 c2 分布是否塌缩;
 - SIF 的词表外词(离线语料未见的词)被跳过, RL 中出现的新词不产生 c3 信号;
-- c2 句向量在 reward 进程内默认 CPU BGE(batch 内 ~几百句, 模板化文本
-  缓存命中率高); 延迟敏感时可用 `niche_embed_device=cuda`(注意 driver 端
-  显存)或改用 tfidf 变体(c2 仍需句向量)。
+- c2 句向量在 reward 进程内默认 CPU BGE; 已用 `niche_only_success` +
+  `niche_embed_num_threads` + batch 内去重/进程级缓存控制成本, 仍嫌慢可
+  `niche_embed_device="cuda"`(注意 driver 端显存)或改用 tfidf 变体
+  (c2 仍需句向量)。

@@ -66,15 +66,20 @@ class BgeSentenceEncoder:
     Args:
         model: 模型名或**本地模型目录**(离线环境推荐本地目录, 或设
             环境变量 NICHE_BGE_MODEL 统一指定)。
+        num_threads: CPU 推理的 torch 线程数(config 的
+            niche_embed_num_threads; Ray 会给 actor/driver 设
+            OMP_NUM_THREADS=1, 不覆盖时 CPU 上会慢 ~10 倍; 0 = 不覆盖)。
     """
 
     def __init__(self, model: str = None,
-                 device: str = "cpu", batch_size: int = 64):
+                 device: str = "cpu", batch_size: int = 64,
+                 num_threads: int = 8):
         self.model_name = str(
             model or os.environ.get("NICHE_BGE_MODEL") or DEFAULT_BGE_MODEL
         )
         self.device = str(device)
         self.batch_size = int(batch_size)
+        self.num_threads = int(num_threads or 0)
         self._model = None
         self._tokenizer = None
 
@@ -89,6 +94,12 @@ class BgeSentenceEncoder:
         import torch
         from transformers import AutoModel, AutoTokenizer
 
+        threads = self.num_threads or int(
+            os.environ.get("NICHE_EMBED_THREADS") or 0
+        )
+        if threads > 0:
+            torch.set_num_threads(threads)
+        self._torch = torch
         try:
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self._model = (
@@ -98,10 +109,16 @@ class BgeSentenceEncoder:
             raise OSError(
                 f"niche 第 2 项句向量模型加载失败({self.model_name}): {e}\n"
                 "离线/内网环境请把 config 的 rl.inter_query_diversity."
-                "niche_embed_model 或环境变量 NICHE_BGE_MODEL 指向本地模型目录"
+                "niche_embed_model 指向本地模型目录"
                 "(如 ../bge-base-en-v1.5, 可用 hf download --local-dir 预下载)。"
             ) from e
-        self._torch = torch
+        if str(self.device).startswith("cpu"):
+            print(
+                f"[niche] BGE 句向量: model={self.model_name} device=cpu "
+                f"torch_threads={torch.get_num_threads()} "
+                "(config: niche_embed_num_threads)",
+                flush=True,
+            )
 
     def encode(self, texts: list) -> np.ndarray:
         """(N, dim) float32, 逐行 L2 归一化。"""
@@ -167,6 +184,7 @@ class NicheDiversityScorer:
         embed_model: str = None,
         embed_device: str = "cpu",
         embed_batch_size: int = 64,
+        embed_num_threads: int = 8,
         sif_a: float = 1e-3,
         bm25_k1: float = 1.2,
         bm25_b: float = 0.0,
@@ -194,6 +212,7 @@ class NicheDiversityScorer:
             "model": embed_model,  # None -> BgeSentenceEncoder 按 env/默认解析
             "device": str(embed_device),
             "batch_size": int(embed_batch_size),
+            "num_threads": int(embed_num_threads or 0),
         }
         self._sent_cache: dict = {}
         self._sent_cache_size = int(sentence_cache_size)
@@ -433,7 +452,10 @@ class NicheDiversityScorer:
                     "ref_summaries": ref_summaries,
                 }
             )
-            all_sentences |= niche_sents | pop_sents
+            # 只有两侧句子都存在时 c2 才可计算, 也只在这时才需要句子
+            # embedding(省掉只有单侧句子的 rollout 的 BGE 计算)
+            if niche_sents and pop_sents:
+                all_sentences |= niche_sents | pop_sents
             all_summaries.add(summary)
             all_summaries.update(s for s in ref_summaries if s)
 

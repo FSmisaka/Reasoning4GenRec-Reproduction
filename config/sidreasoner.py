@@ -227,7 +227,7 @@ CONFIG: Dict[str, Any] = {
             #   对 GRPO 组内排序几乎无影响; rank 把每组的 TD 按秩映射到
             #   [0,1] 均布(仅 I=1 的 rollout 参与), 组内区分度由 λ·σ 直接
             #   控制。rank 模式下建议 sigma=1.0(否则一半排序被裁剪)。
-            "td_norm": "rank",
+            "td_norm": "none",
             # similarity: 多样性度量。bleu = SymBLEU(DIVER 官方口径, 受
             #   bleu_smoothing 影响); ngram_jaccard = 1 - |G_n(a)∩G_n(b)| /
             #   |G_n(a)∪G_n(b)|(n-gram 集合 Jaccard); llmjudge = LLM-as-a-Judge
@@ -246,9 +246,11 @@ CONFIG: Dict[str, Any] = {
             "niche_lexstats_path": None,    # 默认 .../cot_lexstats.json
             "niche_sif_path": None,         # 默认 .../sif_words.npz
             "niche_summary_method": "sif",  # 第 3 项总结句度量: sif(Arora 2017, 默认) | tfidf(BM25 加权)
-            "niche_embed_model": None,      # 第 2 项句子 embedding 模型: None = NICHE_BGE_MODEL 环境变量 > BAAI/bge-base-en-v1.5; 离线可填本地目录
+            "niche_embed_model": "/data/jiangchumeng/wangyiyao/bge-base-en-v1.5",      # 第 2 项句子 embedding 模型: 可填本地目录(离线); None = NICHE_BGE_MODEL 环境变量 > BAAI/bge-base-en-v1.5
             "niche_embed_device": "cpu",    # reward 在 driver 端执行, 默认 CPU(可 cuda)
             "niche_embed_batch_size": 64,   # 句子 embedding 批大小
+            "niche_embed_num_threads": 8,   # CPU 句向量的 torch 线程数(Ray 默认 OMP_NUM_THREADS=1 会慢 ~10 倍; 0=不覆盖, 建议≈物理核数)
+            "niche_only_success": True,     # 只对能拿到 intrinsic 的成功 rollout 算 c1/c2/c3(失败行 intrinsic 恒 0, 训练数学不变; 低成功率阶段省 ~90% BGE 计算)
             # combine: 正确性 x 多样性合并方式。add = R + intrinsic(DIVER
             #   塑形); mul = R * (1 + intrinsic)(多样性按比例放大正确性
             #   reward, R=0 不获得加成)。CORR/DIV/COMBINE 环境变量可覆盖。

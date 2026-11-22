@@ -145,6 +145,7 @@ if [[ "${INTER_DIV}" == "True" ]]; then
         IQD_SIM IQD_NGRAM_N IQD_COMBINE IQD_JURL IQD_JMODEL IQD_JCONC \
         IQD_NICHE_DICT IQD_NICHE_LEX IQD_NICHE_SIF IQD_NICHE_METHOD \
         IQD_NICHE_EMBMODEL IQD_NICHE_EMBDEV IQD_NICHE_EMBBS \
+        IQD_NICHE_EMBTHREADS IQD_NICHE_ONLYSUCC \
         < <(${PY} - <<'EOF'
 from config import load_config
 import os
@@ -168,7 +169,9 @@ print(enc, path, iqd.get("top_k_neighbors", 8), iqd.get("same_user_jaccard", 0.8
       iqd.get("niche_sif_path") or f"data/raw/Amazon/niche/{cat}/sif_words.npz",
       iqd.get("niche_summary_method", "sif"),
       iqd.get("niche_embed_model") or os.environ.get("NICHE_BGE_MODEL") or "BAAI/bge-base-en-v1.5",
-      iqd.get("niche_embed_device", "cpu"), iqd.get("niche_embed_batch_size", 64))
+      iqd.get("niche_embed_device", "cpu"), iqd.get("niche_embed_batch_size", 64),
+      iqd.get("niche_embed_num_threads", 8),
+      ("true" if iqd.get("niche_only_success", True) else "false"))
 EOF
 )
   # metrics_path 用 "-" 占位避免空字段导致 read 变量错位
@@ -270,6 +273,8 @@ EOF
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_embed_model=${IQD_NICHE_EMBMODEL}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_embed_device=${IQD_NICHE_EMBDEV}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_embed_batch_size=${IQD_NICHE_EMBBS}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_embed_num_threads=${IQD_NICHE_EMBTHREADS}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_only_success=${IQD_NICHE_ONLYSUCC}"
   if [[ -n "${IQD_METRICS}" ]]; then
     INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.metrics_path=$(pwd)/${IQD_METRICS}"
   fi

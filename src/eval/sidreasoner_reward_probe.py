@@ -104,7 +104,11 @@ def call_reward(fn, rows, per_row: bool = False, kwargs: dict = None) -> list:
 # 组内区分度统计(纯逻辑, 可单测)
 # --------------------------------------------------------------------------- #
 
-_DEFAULT_COMPONENTS = ("score", "base_reward", "td", "intrinsic")
+_DEFAULT_COMPONENTS = (
+    "score", "base_reward", "td", "intrinsic",
+    # niche(similarity="niche")的逐分量诊断; 其他 reward 无这些键, 自动跳过
+    "niche_c1", "niche_c2", "niche_c3",
+)
 
 
 def component_stats(values: list) -> dict:
@@ -423,6 +427,8 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             "niche_embed_model": iqd.get("niche_embed_model"),
             "niche_embed_device": iqd.get("niche_embed_device", "cpu"),
             "niche_embed_batch_size": iqd.get("niche_embed_batch_size", 64),
+            "niche_embed_num_threads": iqd.get("niche_embed_num_threads", 8),
+            "niche_only_success": iqd.get("niche_only_success", True),
             # 探针的 interdiv 日志独立落盘, 不污染训练的 interdiv_metrics.jsonl
             "metrics_path": os.path.join(out_dir, "interdiv_probe_metrics.jsonl"),
         }

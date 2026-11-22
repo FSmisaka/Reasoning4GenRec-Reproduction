@@ -491,6 +491,59 @@ def test_addon_niche_c1_c2_without_refs(niche_addon):
     )
 
 
+def test_addon_niche_diag_keys_consistent(niche_addon):
+    """未评分 rollout(CoT 截断/过短)也必须带全部 niche 诊断键。
+
+    回归: verl BatchRewardManager 按 key 聚合逐行 dict 为等长数组;
+    缺键会导致 batch 内长度不一致(update_actor -> check_consistency
+    断言 "key niche_c1 length N != batch size M")。
+    """
+    ad, n_q, g = niche_addon(n_queries=2)
+    own = f"{NICHE_SENT} {POP_SENT} adventure racing appeal."
+    rows = _niche_batch([("train", 0, own), ("train", 1, "placeholder")])
+    # q0 第 1 条: CoT 未闭合(extract_cot -> None)
+    rows[1]["solution_str"] = "broken without close tag " + "word " * 10
+    # q1 第 1 条: CoT 过短(< 5 token)
+    rows[g + 1]["solution_str"] = _resp("tiny")
+    out = ad.compute_batch(rows, [0.0] * len(rows))
+    # 所有行的键集必须一致
+    keysets = {frozenset(r.keys()) for r in out}
+    assert len(keysets) == 1, keysets
+    # 未评分行取默认 0(而不是缺键)
+    for r in (out[1], out[g + 1]):
+        assert r["niche_c1"] == 0.0 and r["niche_c1_defined"] == 0
+        assert r["niche_c2"] == 0.0 and r["niche_c3"] == 0.0
+    # 评分行仍是真实分解值
+    assert out[0]["niche_c1"] == pytest.approx(1.0)
+
+
+def test_addon_niche_only_success_skips_failures(niche_addon):
+    """默认只对成功 rollout 计算 c1/c2/c3(省 BGE 计算); 关掉后失败行也计算。"""
+    ad, n_q, g = niche_addon(n_queries=2)
+    ad.success_mode = "prefix"  # GT 首层匹配才算成功
+    own = f"{NICHE_SENT} {POP_SENT} adventure racing appeal."
+    rows = _niche_batch([("train", 0, own), ("train", 1, own)])
+    # 每条 query 第 0 条成功, 第 1 条首层不匹配 -> 失败
+    for qi in range(n_q):
+        rows[qi * g + 1]["solution_str"] = _resp(own, "<a_9><b_9><c_9>")
+    out = ad.compute_batch(rows, [0.0] * len(rows))
+    # q0(历史 [0,2]) 成功行正常评分; 失败行被跳过(td=0 且诊断取默认)
+    assert out[0]["success"] == 1 and out[0]["niche_c1"] == pytest.approx(1.0)
+    assert out[1]["success"] == 0
+    assert out[1]["td"] == 0.0 and out[1]["niche_c1"] == 0.0
+    # q1(历史 [0,1], 无 niche) 成功行 c1 未定义, 但仍被评分(c2)
+    assert out[2]["success"] == 1 and out[2]["niche_c1_defined"] == 0
+    assert out[3]["td"] == 0.0
+    # 关闭 niche_only_success: 失败行也计算 d(但 intrinsic 仍为 0)
+    ad2, _, _ = niche_addon(n_queries=2, niche_only_success=False)
+    ad2.success_mode = "prefix"
+    out2 = ad2.compute_batch(rows, [0.0] * len(rows))
+    assert out2[1]["success"] == 0
+    assert out2[1]["niche_c1"] == pytest.approx(1.0)
+    assert out2[1]["td"] > 0.0  # c1=1 -> d>=1/3
+    assert out2[1]["intrinsic"] == 0.0
+
+
 def test_addon_niche_rejects_missing_paths(tmp_path):
     """niche 产物缺失时构造报错(指向 make <ds>-sidreasoner-niche-data)。"""
     n, dim = 2, 4

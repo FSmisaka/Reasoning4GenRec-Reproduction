@@ -40,6 +40,21 @@ from .user_store import UserEmbeddingStore
 #: 无意义)
 _MIN_COT_TOKENS = 5
 
+#: niche 逐 rollout 诊断键的默认值。未评分 rollout(CoT 截断/过短)也必须
+#: 带这些键: verl BatchRewardManager 按 key 把逐行 dict 聚合成等长数组,
+#: batch 内缺键会导致 update_actor 前 check_consistency 断言失败
+#: (key niche_c1 length 4079 != batch size 4096)。
+_NICHE_DIAG_DEFAULTS = {
+    "niche_c1": 0.0,
+    "niche_c2": 0.0,
+    "niche_c3": 0.0,
+    "niche_c1_defined": 0,
+    "niche_c2_defined": 0,
+    "niche_c3_defined": 0,
+    "niche_hist_count": 0,
+    "niche_mentioned_count": 0,
+}
+
 
 class InterQueryDiversityAddon:
     """可插在任意逐行 base reward 之上的跨用户多样性奖励。"""
@@ -77,6 +92,8 @@ class InterQueryDiversityAddon:
         niche_embed_model: str = None,
         niche_embed_device: str = "cpu",
         niche_embed_batch_size: int = 64,
+        niche_embed_num_threads: int = 8,
+        niche_only_success: bool = True,
         niche_encoder=None,
     ):
         """device 仅用于 BxB 邻居矩阵乘, 默认 cpu: reward 在 verl driver
@@ -106,6 +123,11 @@ class InterQueryDiversityAddon:
             缓存 meta 里的 data_dir 推导(<root>/niche/<Category>/);
             niche_summary_method: "sif"(默认) | "tfidf"; niche_encoder 供
             测试/探针注入句向量编码器(生产懒加载 BGE)。
+            niche_embed_num_threads: CPU 句向量的 torch 线程数(Ray 会给
+            driver 设 OMP_NUM_THREADS=1, 不覆盖会慢 ~10 倍; 0 = 不覆盖)。
+            niche_only_success: 只对能拿到 intrinsic 的成功 rollout 计算
+            c1/c2/c3(失败行的 intrinsic 本就为 0, 训练数学不变; 低成功率
+            阶段可省 ~90% 的 BGE 计算)。
         combine: 正确性 x 多样性合并方式("add" 加法塑形 / "mul" 乘法:
             R' = R * (1 + intrinsic))。
         """
@@ -146,6 +168,7 @@ class InterQueryDiversityAddon:
                 embed_model=niche_embed_model,
                 embed_device=niche_embed_device,
                 embed_batch_size=niche_embed_batch_size,
+                embed_num_threads=niche_embed_num_threads,
             )
         else:
             raise ValueError(
@@ -169,6 +192,9 @@ class InterQueryDiversityAddon:
         self.td_norm = str(td_norm)
         if self.td_norm not in ("none", "rank"):
             raise ValueError(f"未知 td_norm: {td_norm!r}(none | rank)")
+        # niche: 只对能拿到 intrinsic 的成功 rollout 算 d(失败行 intrinsic
+        # 恒 0, 训练数学不变; 低成功率阶段可省 ~90% 的 BGE 计算)
+        self.niche_only_success = bool(niche_only_success)
         self.combine = str(combine)
         if self.combine not in ("add", "mul"):
             raise ValueError(f"未知 combine: {combine!r}(add | mul)")
@@ -380,11 +406,22 @@ class InterQueryDiversityAddon:
                 results[r]["n_refs"] = len(valid_refs)
 
         if niche:
+            # 先给所有 train 行补默认诊断键, 保证同一 batch 内逐行 dict 的
+            # 键集完全一致(verl 按 key 聚合为等长数组; 未评分 rollout 若缺
+            # 键会导致 batch size 断言失败)
+            for key in train_keys:
+                for r in groups[key]:
+                    for k, v in _NICHE_DIAG_DEFAULTS.items():
+                        results[r].setdefault(k, v)
             # niche 的 c1/c2 不依赖邻居 Reference(即使 K_q=0 也计算,
             # 只有 c3 归 0), 整 batch 一次性提交(句向量批量前向)
             niche_jobs = []
             for q_i, key in enumerate(train_keys):
                 for r in groups[key]:
+                    # 失败 rollout 的 intrinsic 恒为 0(I=0), d 用不到;
+                    # 默认跳过它们的 c1/c2/c3(主要成本是 BGE 句向量)
+                    if self.niche_only_success and not success_flags[r]:
+                        continue
                     cot = cots[r]
                     if cot is None or len(cot.split()) < _MIN_COT_TOKENS:
                         continue
