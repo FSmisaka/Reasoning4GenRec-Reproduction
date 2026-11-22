@@ -427,8 +427,9 @@ make games-sidreasoner-reward-probe ARGS="--reward niche"
 
 配置(`config/sidreasoner.py` 的 `rl.inter_query_diversity`): `niche_dict_path`
 / `niche_lexstats_path` / `niche_sif_path`(默认 `<root>/niche/<Category>/...`)、
-`niche_summary_method`(sif|tfidf)、`niche_embed_model`(c2 句向量, 默认
-BAAI/bge-base-en-v1.5, 复用 RQ-VAE 的 BGE)、`niche_embed_device`(默认 cpu,
+`niche_summary_method`(sif|tfidf)、`niche_embed_model`(c2 句向量; 默认解析
+顺序 = config 值 > `NICHE_BGE_MODEL` 环境变量 > `BAAI/bge-base-en-v1.5`,
+**离线/内网可填本地模型目录**, 与预处理共用)、`niche_embed_device`(默认 cpu,
 reward 在 driver 端执行)、`niche_embed_batch_size`。
 
 ### 诊断指标

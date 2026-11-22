@@ -420,7 +420,7 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             "niche_sif_path": iqd.get("niche_sif_path")
             or os.path.join(niche_dir, "sif_words.npz"),
             "niche_summary_method": iqd.get("niche_summary_method", "sif"),
-            "niche_embed_model": iqd.get("niche_embed_model", "BAAI/bge-base-en-v1.5"),
+            "niche_embed_model": iqd.get("niche_embed_model"),
             "niche_embed_device": iqd.get("niche_embed_device", "cpu"),
             "niche_embed_batch_size": iqd.get("niche_embed_batch_size", 64),
             # 探针的 interdiv 日志独立落盘, 不污染训练的 interdiv_metrics.jsonl

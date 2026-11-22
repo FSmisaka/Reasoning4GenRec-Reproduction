@@ -53,14 +53,26 @@ def split_sentences(text: str) -> list:
     return [s.strip() for s in _SENT_SPLIT_RE.split(text or "") if s.strip()]
 
 
+#: c2 句向量模型的缺省来源: config/构造参数 > NICHE_BGE_MODEL 环境变量
+#: (离线/内网可指向本地模型目录) > 官方仓库名
+DEFAULT_BGE_MODEL = "BAAI/bge-base-en-v1.5"
+
+
 class BgeSentenceEncoder:
     """BGE 句子编码器(c2 的句子 embedding; CLS pooling + L2 归一化,
     与 src/data/rqvae_embed.py 同口径)。懒加载, 默认 CPU(reward 在
-    verl driver 进程执行, 默认 cuda 会在 colocated GPU 上挤占显存)。"""
+    verl driver 进程执行, 默认 cuda 会在 colocated GPU 上挤占显存)。
 
-    def __init__(self, model: str = "BAAI/bge-base-en-v1.5",
+    Args:
+        model: 模型名或**本地模型目录**(离线环境推荐本地目录, 或设
+            环境变量 NICHE_BGE_MODEL 统一指定)。
+    """
+
+    def __init__(self, model: str = None,
                  device: str = "cpu", batch_size: int = 64):
-        self.model_name = str(model)
+        self.model_name = str(
+            model or os.environ.get("NICHE_BGE_MODEL") or DEFAULT_BGE_MODEL
+        )
         self.device = str(device)
         self.batch_size = int(batch_size)
         self._model = None
@@ -77,10 +89,18 @@ class BgeSentenceEncoder:
         import torch
         from transformers import AutoModel, AutoTokenizer
 
-        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self._model = (
-            AutoModel.from_pretrained(self.model_name).to(self.device).eval()
-        )
+        try:
+            self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self._model = (
+                AutoModel.from_pretrained(self.model_name).to(self.device).eval()
+            )
+        except Exception as e:
+            raise OSError(
+                f"niche 第 2 项句向量模型加载失败({self.model_name}): {e}\n"
+                "离线/内网环境请把 config 的 rl.inter_query_diversity."
+                "niche_embed_model 或环境变量 NICHE_BGE_MODEL 指向本地模型目录"
+                "(如 ../bge-base-en-v1.5, 可用 hf download --local-dir 预下载)。"
+            ) from e
         self._torch = torch
 
     def encode(self, texts: list) -> np.ndarray:
@@ -144,7 +164,7 @@ class NicheDiversityScorer:
         summary_method: str = "sif",
         sif_path: str = None,
         encoder=None,
-        embed_model: str = "BAAI/bge-base-en-v1.5",
+        embed_model: str = None,
         embed_device: str = "cpu",
         embed_batch_size: int = 64,
         sif_a: float = 1e-3,
@@ -171,7 +191,7 @@ class NicheDiversityScorer:
 
         self._encoder = encoder
         self._embed_cfg = {
-            "model": str(embed_model),
+            "model": embed_model,  # None -> BgeSentenceEncoder 按 env/默认解析
             "device": str(embed_device),
             "batch_size": int(embed_batch_size),
         }

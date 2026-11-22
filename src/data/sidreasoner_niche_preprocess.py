@@ -32,7 +32,10 @@
     DATASET=games make games-sidreasoner-niche-data
     (等价: DATASET=games .venv/bin/python -m src.data.sidreasoner_niche_preprocess)
     可选: --skip-sif(仅生成两个 JSON)/ --force / --device cuda
-"""
+    词向量模型来源: --model > NICHE_BGE_MODEL 环境变量 > config rqvae
+    embed.model; 离线/内网可先用 hf download --local-dir 预下载并把
+    --model / NICHE_BGE_MODEL 指向本地目录(reward 端的 c2 句向量模型
+    同样支持该环境变量)。"""
 
 import argparse
 import ast
@@ -264,7 +267,13 @@ def main(argv=None, cfg=None):
     ][: args.sif_max_vocab]
     if not vocab:
         raise ValueError("语料词表为空, 无法构建 SIF 词向量。")
-    model = args.model or load_config("rqvae")["embed"]["model"]
+    # 模型来源: --model > NICHE_BGE_MODEL 环境变量(便于 make 传本地路径,
+    # 规避 HF 下载问题) > config rqvae embed.model
+    model = (
+        args.model
+        or os.environ.get("NICHE_BGE_MODEL")
+        or load_config("rqvae")["embed"]["model"]
+    )
     device = args.device or pick_device()
     print(f"[niche-prep] SIF: {len(vocab)} 词 x BGE({model}) on {device} ...")
     embeddings = encode_vocab_words(vocab, model, device, args.batch_size)

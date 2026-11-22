@@ -167,7 +167,7 @@ print(enc, path, iqd.get("top_k_neighbors", 8), iqd.get("same_user_jaccard", 0.8
       iqd.get("niche_lexstats_path") or f"data/raw/Amazon/niche/{cat}/cot_lexstats.json",
       iqd.get("niche_sif_path") or f"data/raw/Amazon/niche/{cat}/sif_words.npz",
       iqd.get("niche_summary_method", "sif"),
-      iqd.get("niche_embed_model", "BAAI/bge-base-en-v1.5"),
+      iqd.get("niche_embed_model") or os.environ.get("NICHE_BGE_MODEL") or "BAAI/bge-base-en-v1.5",
       iqd.get("niche_embed_device", "cpu"), iqd.get("niche_embed_batch_size", 64))
 EOF
 )

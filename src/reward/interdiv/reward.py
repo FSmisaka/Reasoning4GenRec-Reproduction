@@ -74,7 +74,7 @@ class InterQueryDiversityAddon:
         niche_lexstats_path: str = None,
         niche_sif_path: str = None,
         niche_summary_method: str = "sif",
-        niche_embed_model: str = "BAAI/bge-base-en-v1.5",
+        niche_embed_model: str = None,
         niche_embed_device: str = "cpu",
         niche_embed_batch_size: int = 64,
         niche_encoder=None,

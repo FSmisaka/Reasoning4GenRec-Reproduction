@@ -129,7 +129,7 @@ def _get_addon(kwargs: dict):
             niche_lexstats_path=kwargs.get("niche_lexstats_path"),
             niche_sif_path=kwargs.get("niche_sif_path"),
             niche_summary_method=str(kwargs.get("niche_summary_method", "sif")),
-            niche_embed_model=str(kwargs.get("niche_embed_model", "BAAI/bge-base-en-v1.5")),
+            niche_embed_model=kwargs.get("niche_embed_model"),
             niche_embed_device=str(kwargs.get("niche_embed_device", "cpu")),
             niche_embed_batch_size=int(kwargs.get("niche_embed_batch_size", 64)),
         )

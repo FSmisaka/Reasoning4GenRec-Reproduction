@@ -246,7 +246,7 @@ CONFIG: Dict[str, Any] = {
             "niche_lexstats_path": None,    # 默认 .../cot_lexstats.json
             "niche_sif_path": None,         # 默认 .../sif_words.npz
             "niche_summary_method": "sif",  # 第 3 项总结句度量: sif(Arora 2017, 默认) | tfidf(BM25 加权)
-            "niche_embed_model": "BAAI/bge-base-en-v1.5",  # 第 2 项句子 embedding 模型
+            "niche_embed_model": None,      # 第 2 项句子 embedding 模型: None = NICHE_BGE_MODEL 环境变量 > BAAI/bge-base-en-v1.5; 离线可填本地目录
             "niche_embed_device": "cpu",    # reward 在 driver 端执行, 默认 CPU(可 cuda)
             "niche_embed_batch_size": 64,   # 句子 embedding 批大小
             # combine: 正确性 x 多样性合并方式。add = R + intrinsic(DIVER

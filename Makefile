@@ -273,7 +273,7 @@ $(eval $(call SIDREASONER_TARGET_BEAM_DIV,industrial,niche,rl-beam-niche))
 # 产物 data/raw/Amazon/niche/<Category>/(similarity="niche" 前置)
 define SIDREASONER_NICHE_DATA_TARGET
 $(1)-sidreasoner-niche-data:
-	DATASET=$(1) HF_ENDPOINT=$$$${HF_ENDPOINT:-https://hf-mirror.com} $(PY) -m src.data.sidreasoner_niche_preprocess
+	DATASET=$(1) HF_ENDPOINT=$$$${HF_ENDPOINT:-https://hf-mirror.com} HF_HUB_DISABLE_XET=1 $(PY) -m src.data.sidreasoner_niche_preprocess
 endef
 $(eval $(call SIDREASONER_NICHE_DATA_TARGET,games))
 $(eval $(call SIDREASONER_NICHE_DATA_TARGET,office))
