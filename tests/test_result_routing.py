@@ -93,6 +93,9 @@ def test_result_dir_six_kinds():
     # 泛化: beam 模型 + 温度采样
     assert result_dir("Video_Games", "think", model=beam, temperature=1.5) == "think_rolloutbeam_temp"
     assert result_dir("Video_Games", "short", max_len=5) == "le5"
+    # niche(小众物品)多样性变体 -> think_rolloutbeam_niche
+    niche = ".../Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam_niche/global_step_1/actor_merged"
+    assert result_dir("Video_Games", "think", model=niche) == "think_rolloutbeam_niche"
 
 
 def test_result_dir_sft_variants():

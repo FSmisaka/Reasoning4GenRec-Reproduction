@@ -107,6 +107,7 @@ def variant_of_model(model) -> str:
         "llmjudge" if "_llmjudge" in path
         else "ngram" if "_ngram" in path
         else "bleu" if "_bleu" in path
+        else "niche" if "_niche" in path
         else None
     )
     variant = "_".join(x for x in (corr, div) if x)

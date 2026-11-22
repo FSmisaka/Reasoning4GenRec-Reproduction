@@ -7,7 +7,8 @@
 复用方式(对后续任何新 reward 通用):
 1. preset: --reward bleu(默认, 跨 Query 多样性)/ ngram(同上的 n-gram
    Jaccard 度量, 与 rl_ngram.sh 一致)/ llmjudge(LLM-as-a-Judge 语义相似度,
-   与 rl_beam_llmjudge.sh 一致)/ steprule(论文原版);
+   与 rl_beam_llmjudge.sh 一致)/ niche(小众物品多样性, 与 rl_beam_niche.sh
+   一致, 需先 make <dataset>-sidreasoner-niche-data)/ steprule(论文原版);
 2. custom: --reward custom --reward-entry <入口.py> --reward-name <函数名>
    [--reward-kwargs k=v ...] [--per-row](逐行 naive API);
 3. --batch-json <旧探针输出>: 复用上次生成的 batch, 只换 reward 重跑,
@@ -374,11 +375,12 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
     """返回 (entry_path, fn_name, kwargs, per_row)。"""
     iqd = cfg["rl"].get("inter_query_diversity", {}) or {}
     category = resolve_category(cfg["data"])
-    if preset in ("bleu", "ngram", "llmjudge"):
+    if preset in ("bleu", "ngram", "llmjudge", "niche"):
         enc = iqd.get("user_encoder_type", "sasrec")
         emb = iqd.get("user_embedding_path") or os.path.join(
             "runs", "sidreasoner", "user_embed", f"{category}_{enc}.npz"
         )
+        niche_dir = os.path.join(cfg["data"]["root"], "niche", category)
         kwargs = {
             "correctness_reward_type": "steprule",
             "combine": iqd.get("combine", "add"),
@@ -395,16 +397,32 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             "reference_mode": iqd.get("reference_mode", "full"),
             "bleu_smoothing": iqd.get("bleu_smoothing", "none"),
             "td_norm": iqd.get("td_norm", "none"),
-            # ngram/llmjudge preset 强制对应度量(与 rl_ngram.sh / rl_beam_llmjudge.sh
-            # 一致); bleu preset 按 config(与 rl-bleu 一致, 便于跟随训练配置)
+            # ngram/llmjudge/niche preset 强制对应度量(与 rl_ngram.sh /
+            # rl_beam_llmjudge.sh / rl_beam_niche.sh 一致); bleu preset 按
+            # config(与 rl-bleu 一致, 便于跟随训练配置)
             "similarity": (
-                {"ngram": "ngram_jaccard", "llmjudge": "llmjudge"}.get(preset)
+                {
+                    "ngram": "ngram_jaccard",
+                    "llmjudge": "llmjudge",
+                    "niche": "niche",
+                }.get(preset)
                 or iqd.get("similarity", "bleu")
             ),
             "ngram_n": iqd.get("ngram_n", 1),
             "judge_base_url": iqd.get("judge_base_url", "http://localhost:8000/v1"),
             "judge_model": iqd.get("judge_model", "Qwen3-1.7B"),
             "judge_concurrency": iqd.get("judge_concurrency", 32),
+            # niche(小众物品)多样性: 离线产物路径与方法(其他度量忽略)
+            "niche_dict_path": iqd.get("niche_dict_path")
+            or os.path.join(niche_dir, "popularity.json"),
+            "niche_lexstats_path": iqd.get("niche_lexstats_path")
+            or os.path.join(niche_dir, "cot_lexstats.json"),
+            "niche_sif_path": iqd.get("niche_sif_path")
+            or os.path.join(niche_dir, "sif_words.npz"),
+            "niche_summary_method": iqd.get("niche_summary_method", "sif"),
+            "niche_embed_model": iqd.get("niche_embed_model", "BAAI/bge-base-en-v1.5"),
+            "niche_embed_device": iqd.get("niche_embed_device", "cpu"),
+            "niche_embed_batch_size": iqd.get("niche_embed_batch_size", 64),
             # 探针的 interdiv 日志独立落盘, 不污染训练的 interdiv_metrics.jsonl
             "metrics_path": os.path.join(out_dir, "interdiv_probe_metrics.jsonl"),
         }
@@ -422,7 +440,7 @@ def preset_kwargs(cfg, preset: str, out_dir: str) -> tuple:
             True,
         )
     raise ValueError(
-        f"未知 preset '{preset}'(bleu | ngram | steprule; 自定义用 --reward custom)"
+        f"未知 preset '{preset}'(bleu | ngram | niche | steprule; 自定义用 --reward custom)"
     )
 
 
@@ -617,7 +635,7 @@ def main(argv=None, cfg=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--reward", default="bleu",
-        help="preset: bleu | ngram | llmjudge | steprule | custom",
+        help="preset: bleu | ngram | llmjudge | niche | steprule | custom",
     )
     parser.add_argument("--reward-entry", default=None, help="custom: reward 入口 .py 路径")
     parser.add_argument("--reward-name", default="rule_base_reward", help="custom: 入口函数名")

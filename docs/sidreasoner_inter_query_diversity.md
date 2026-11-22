@@ -32,7 +32,8 @@ R'_{q,i} = R_{q,i} + λ(t) * I_{q,i} * clip( γ^{T_{q,i}} * d(o_{q,i}), 0, σ )
   子集;`K_q = |N_K^valid(q)|`,为 0 时 `d = 0`;
 - `c~_{q'}`:邻居 q' 的 G 条 rollout 中随机选一条成功 CoT 作 Reference
   (多个成功时随机,seed 可配);
-- `similarity`(配置)可选 `bleu`(默认, 下式)、`ngram_jaccard` 或 `llmjudge`:
+- `similarity`(配置)可选 `bleu`(默认, 下式)、`ngram_jaccard`、`llmjudge`
+  或 `niche`(小众物品多样性, 三个分量的设计见第 8 节):
   `sim(a,b) = |G_n(a)∩G_n(b)| / |G_n(a)∪G_n(b)|`(n-gram 集合 Jaccard,
   `ngram_n` 控阶数), `TD = 1 - sim`。`make <ds>-sidreasoner-rl-ngram`
   即 Jaccard 版。`llmjudge` 由 Qwen3 judge 看双方历史, 对 evidence /
@@ -186,6 +187,7 @@ Jaccard≥0.8 兜底不会误伤)。
 | `metrics_path` | None | 默认 embedding 同目录 `interdiv_metrics.jsonl` |
 | `log_every` | 1 | 摘要打印间隔 |
 | `embed_batch_size` / `sasrec_checkpoint` / `bge_item_embeddings` | - | 仅离线提取用 |
+| `niche_*`(dict/lexstats/sif 路径, summary_method, embed_*) | 见第 8 节 | 仅 `similarity="niche"` 使用 |
 
 ### 日志
 
@@ -229,9 +231,11 @@ make games-sidreasoner-reward-curves ARGS="--metrics logs/<实验名>_interdiv_m
 | `src/reward/user_represent/{__init__,registry,base,sasrec_encoder,bge_mean_encoder}.py` | 用户表征编码器接口 + 注册表(SASRec / BGE 均值) |
 | `src/data/sidreasoner_user_embed.py` | 离线 User Embedding 提取脚本(parquet → npz) |
 | `src/reward/interdiv/{__init__,bleu,llmjudge,similarity,cot_utils,user_store,neighbor,shaping,reward}.py` + `judge_prompt.txt` | BLEU / n-gram Jaccard / LLM-Judge 语义相似度 / CoT 与成功判定 / 缓存查表 / Top-K 检索 / 塑形(add·mul) / 编排 |
+| `src/reward/interdiv/niche.py` + `src/data/sidreasoner_niche_preprocess.py` | Niche 小众物品多样性 scorer(c1/c2/c3)与离线预处理(第 8 节) |
 | `src/reward/direct_recommendation_interdiv.py` | verl BatchRewardManager 入口(正确性 reward x 多样性 reward;`correctness_reward_type` 旧名 `base_reward_type` 兼容) |
-| `scripts/sidreasoner/user_embed.sh` + `rl_bleu.sh` / `rl_ngram.sh` / `rl_beam_bleu.sh` / `rl_beam_ngram.sh` / `rl_beam_llmjudge.sh` / `rl_div.sh` | 提取 / 训练命令包装(正确性 x 多样性矩阵) |
+| `scripts/sidreasoner/user_embed.sh` + `rl_bleu.sh` / `rl_ngram.sh` / `rl_beam_bleu.sh` / `rl_beam_ngram.sh` / `rl_beam_llmjudge.sh` / `rl_beam_niche.sh` / `rl_div.sh` | 提取 / 训练命令包装(正确性 x 多样性矩阵) |
 | `tests/test_interdiv.py` | 单测(含入口兼容性、combine、门控/度量矩阵) |
+| `tests/test_niche.py` | niche 单测(预处理/三分量/总结段边界/集成) |
 | `tests/test_user_embed.py` | 提取/编码器/泄漏测试 |
 | `docs/sidreasoner_inter_query_diversity.md` | 本文档 |
 
@@ -261,6 +265,9 @@ advantage、verl fork(仅使用其自带 `batch` reward manager)。
 # 1) 离线 User Embedding(每个数据集一次;parquet 更新后需重跑)
 make games-sidreasoner-user-embed
 
+# 1b) Niche 多样性的离线预处理(仅 similarity="niche" 需要, 见第 8 节)
+make games-sidreasoner-niche-data
+
 # 2) 正确性 x 多样性(StepRule 底座, 加法合并)
 make games-sidreasoner-rl-bleu        # 产物 ..._Qwen3-1.7B_steprule_bleu
 make games-sidreasoner-rl-ngram       # 产物 ..._Qwen3-1.7B_steprule_ngram
@@ -269,6 +276,7 @@ make games-sidreasoner-rl-ngram       # 产物 ..._Qwen3-1.7B_steprule_ngram
 make games-sidreasoner-rl-beam-bleu   # 产物 ..._Qwen3-1.7B_rolloutbeam_bleu
 make games-sidreasoner-rl-beam-ngram  # 产物 ..._Qwen3-1.7B_rolloutbeam_ngram
 make games-sidreasoner-rl-beam-llmjudge  # LLM-Judge 语义多样性(先起 vllm serve, 见 README)
+make games-sidreasoner-rl-beam-niche     # Niche 小众物品多样性(先跑 1b)
 
 # 4) 通用入口(任意组合; COMBINE=mul 为乘法: R' = R*(1+intrinsic))
 make games-sidreasoner-rl-div CORR=beam DIV=ngram COMBINE=mul
@@ -287,7 +295,7 @@ make games-sidreasoner-rl
 ```
 
 产物路由(`<corr>` ∈ steprule/rolloutbeam/rolloutbeam_div,
-`<div>` ∈ bleu/ngram):
+`<div>` ∈ bleu/ngram/llmjudge/niche):
 
 | 环节 | 路径 |
 |---|---|
@@ -359,3 +367,89 @@ make games-sidreasoner-reward-probe ARGS="--reward custom --reward-entry <入口
 Stage 3 实验名后缀), 内含 `batch.rows` 可直接被 `--batch-json` 复用。
 局限: 依赖 rollout 侧 beam search 的 reward(rollout_beam 族)无法用本工具
 生成, 需提供带 `beam_search_results` 的 batch。
+
+---
+
+## 8. Niche(小众物品)多样性奖励
+
+`similarity="niche"`(`make <ds>-sidreasoner-rl-beam-niche`,
+`src/reward/interdiv/niche.py`)。塑形/邻居检索/Reference 选择与
+BLEU/ngram/llmjudge 完全一致, 只替换 d(o) 的计算:
+
+```
+d(o_{q,i}) = ( c1 + c2 + c3 ) / 3
+```
+
+**niche 物品定义**(离线统计): train split 的 dedup (user_id, item) 对计频
+(物品的独立交互用户数), 物品按频次降序排序后**物品数的后 80%** 为 niche
+(频次并列按物品 id 升序截断; index.json 全量物品参与, 零频物品自动 niche;
+Video_Games 实测: 3858 物品中 3086 niche, 边界 17 用户, niche 覆盖 41.6%
+交互量)。与官方/自建 SID 集无关(仅依赖 item id), 但 sid_to_item 取自当前
+index.json, **切换 SID 集后需重跑预处理**。
+
+三个分量:
+
+| 分量 | 定义 | 无法计算时 |
+|---|---|---|
+| c1 信息提取比例 | \|niche(CoT SID) ∩ niche(history)\| / \|niche(history)\|, 集合语义去重; 分子限定历史内(堵死编造冷门 SID 的 hack), 幻觉 SID 丢弃 | 历史无 niche 物品 -> 0 |
+| c2 小众大众相似度 | 含 SID 的句子按"句内物品全 niche/全大众"分成两个去重集合(**mixed 句两侧剔除**, 避免与自身算 sim=1), BGE 句向量全对余弦均值 sim, c2 = 1 - sim | 任一侧为空 -> 0 |
+| c3 总结句相似度 | 总结段 = 最后一个 SID 所在句之后的文本; 与 ≤8 个相似用户 Reference CoT(选择逻辑与 BLEU/ngram/llmjudge 一致, reference_mode 口径)的总结段算余弦均值 sim, c3 = 1 - sim | 无有效 Reference 或总结段为空 -> 0 |
+
+**c3 的度量二选一**(`niche_summary_method`, 训练时可切换):
+
+- `sif`(默认): Arora et al. ICLR 2017 平滑逆频率句向量 —— 词向量按
+  `a/(a+p(w))` 加权平均后减去语料公共成分(第一右奇异向量)再归一。
+  词向量 = BGE(词) 的 CLS 输出(离线预计算静态表), p(w) = 离线语料词频;
+  词表外词跳过。频次加权 + 语义向量, 对短文本的改写鲁棒(TF-IDF 的
+  同义词盲会低估相似度导致 reward 饱和);
+- `tfidf`: BM25 加权稀疏向量余弦(概率化 idf `ln(1+(N-df+0.5)/(df+0.5))`
+  \+ tf 饱和 `tf(k1+1)/(tf+k1)`, b=0)。idf 查离线表, **未登录词取最大
+  idf**(当最稀有词; 注意与 diversity_analysis 的 `idf.get(t,1.0)` 方向相反)。
+
+停用词 = 仓库通用英文表(diversity_analysis.STOPWORDS) ∪ **自动生成的域内
+停用词**(离线语料 df >= 50% 的内容词, 如 user/game/prefer, 数据集无关)。
+
+### 离线预处理与命令
+
+```bash
+# 0) 一次性预处理(约 1 分钟; SIF 词向量需下载 BGE, 服务器上跑)
+make games-sidreasoner-niche-data
+#    -> data/raw/Amazon/niche/Video_Games/{popularity.json, cot_lexstats.json, sif_words.npz}
+#    (语料 = index/Video_Games.integrated_narrative.csv 的 reasoning_path 全量 49133 条)
+
+# 1) 训练(前置同 rl-bleu: user-embed + 修改版 verl fork)
+make games-sidreasoner-rl-beam-niche    # 产物 ..._Qwen3-1.7B_rolloutbeam_niche
+#    切换 c3 度量: config rl.inter_query_diversity.niche_summary_method = tfidf|sif
+
+# 2) reward 探针(验证组内区分度; 需先完成预处理)
+make games-sidreasoner-reward-probe ARGS="--reward niche"
+```
+
+配置(`config/sidreasoner.py` 的 `rl.inter_query_diversity`): `niche_dict_path`
+/ `niche_lexstats_path` / `niche_sif_path`(默认 `<root>/niche/<Category>/...`)、
+`niche_summary_method`(sif|tfidf)、`niche_embed_model`(c2 句向量, 默认
+BAAI/bge-base-en-v1.5, 复用 RQ-VAE 的 BGE)、`niche_embed_device`(默认 cpu,
+reward 在 driver 端执行)、`niche_embed_batch_size`。
+
+### 诊断指标
+
+JSONL 逐 batch 追加 `niche/c1_mean|c2_mean|c3_mean`(分量均值)、
+`niche/c1_defined_frac|c2_defined_frac|c3_defined_frac`(**可计算率**,
+区分结构性 0 与真实低分)、`niche/hist_niche_mean`、`niche/n_scored`;
+逐 rollout 的 reward_extra_info 含 `niche_c1/c2/c3` 与 defined 标志。
+
+实测口径(Video_Games SFT CoT + tfidf 变体, 200 行抽样): c1 可计算 73%
+(历史含 niche 物品的行占比), c2 可计算 ~19%(mixed 句剔除后同时有两种
+句子的 CoT), c3 可计算 77%。注意 **c1/c2 不依赖邻居 Reference**(K_q=0 时
+只有 c3 归 0, c1/c2 照常计算), 这与 BLEU/ngram/llmjudge 的 "K_q=0 -> d=0"
+不同, 是设计内行为。
+
+### 已知限制与风险
+
+- c2 奖励"同一 CoT 内两种句风的反差", 策略可能学出固定的冷门物品话术
+  (跨用户模板收敛, 与用户间多样性目标偏离); lambda 衰减 + sigma clip +
+  三项平均可限制影响, 建议监控不同用户 c2 分布是否塌缩;
+- SIF 的词表外词(离线语料未见的词)被跳过, RL 中出现的新词不产生 c3 信号;
+- c2 句向量在 reward 进程内默认 CPU BGE(batch 内 ~几百句, 模板化文本
+  缓存命中率高); 延迟敏感时可用 `niche_embed_device=cuda`(注意 driver 端
+  显存)或改用 tfidf 变体(c2 仍需句向量)。

@@ -239,6 +239,16 @@ CONFIG: Dict[str, Any] = {
             "judge_base_url": "http://localhost:8000/v1",
             "judge_model": "Qwen3-1.7B",   # vllm serve ../Qwen3-1.7B --served-model-name Qwen3-1.7B
             "judge_concurrency": 32,        # judge 并发请求上限
+            # ---- 以下仅 similarity="niche" 使用(离线产物:
+            # make <dataset>-sidreasoner-niche-data,
+            # 产物 data/raw/Amazon/niche/<Category>/) ----
+            "niche_dict_path": None,        # 默认 <root>/niche/<Category>/popularity.json
+            "niche_lexstats_path": None,    # 默认 .../cot_lexstats.json
+            "niche_sif_path": None,         # 默认 .../sif_words.npz
+            "niche_summary_method": "sif",  # 第 3 项总结句度量: sif(Arora 2017, 默认) | tfidf(BM25 加权)
+            "niche_embed_model": "BAAI/bge-base-en-v1.5",  # 第 2 项句子 embedding 模型
+            "niche_embed_device": "cpu",    # reward 在 driver 端执行, 默认 CPU(可 cuda)
+            "niche_embed_batch_size": 64,   # 句子 embedding 批大小
             # combine: 正确性 x 多样性合并方式。add = R + intrinsic(DIVER
             #   塑形); mul = R * (1 + intrinsic)(多样性按比例放大正确性
             #   reward, R=0 不获得加成)。CORR/DIV/COMBINE 环境变量可覆盖。

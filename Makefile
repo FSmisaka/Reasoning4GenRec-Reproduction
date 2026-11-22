@@ -62,6 +62,8 @@ endif
 	games-sidreasoner-rl-beam-bleu office-sidreasoner-rl-beam-bleu industrial-sidreasoner-rl-beam-bleu \
 	games-sidreasoner-rl-beam-ngram office-sidreasoner-rl-beam-ngram industrial-sidreasoner-rl-beam-ngram \
 	games-sidreasoner-rl-beam-llmjudge office-sidreasoner-rl-beam-llmjudge industrial-sidreasoner-rl-beam-llmjudge \
+	games-sidreasoner-rl-beam-niche office-sidreasoner-rl-beam-niche industrial-sidreasoner-rl-beam-niche \
+	games-sidreasoner-niche-data office-sidreasoner-niche-data industrial-sidreasoner-niche-data \
 	games-sidreasoner-rl-div office-sidreasoner-rl-div industrial-sidreasoner-rl-div \
 	games-sidreasoner-user-embed office-sidreasoner-user-embed industrial-sidreasoner-user-embed \
 	games-sidreasoner-reward-probe office-sidreasoner-reward-probe industrial-sidreasoner-reward-probe \
@@ -262,6 +264,20 @@ $(eval $(call SIDREASONER_TARGET_BEAM_DIV,industrial,ngram,rl-beam-ngram))
 $(eval $(call SIDREASONER_TARGET_BEAM_DIV,games,llmjudge,rl-beam-llmjudge))
 $(eval $(call SIDREASONER_TARGET_BEAM_DIV,office,llmjudge,rl-beam-llmjudge))
 $(eval $(call SIDREASONER_TARGET_BEAM_DIV,industrial,llmjudge,rl-beam-llmjudge))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,games,niche,rl-beam-niche))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,office,niche,rl-beam-niche))
+$(eval $(call SIDREASONER_TARGET_BEAM_DIV,industrial,niche,rl-beam-niche))
+
+# Niche(小众物品)多样性奖励的离线预处理: 物品流行度/niche 字典 +
+# CoT 语料词频(df/BM25 idf/SIF 词向量/自动域内停用词)。
+# 产物 data/raw/Amazon/niche/<Category>/(similarity="niche" 前置)
+define SIDREASONER_NICHE_DATA_TARGET
+$(1)-sidreasoner-niche-data:
+	DATASET=$(1) HF_ENDPOINT=$$$${HF_ENDPOINT:-https://hf-mirror.com} $(PY) -m src.data.sidreasoner_niche_preprocess
+endef
+$(eval $(call SIDREASONER_NICHE_DATA_TARGET,games))
+$(eval $(call SIDREASONER_NICHE_DATA_TARGET,office))
+$(eval $(call SIDREASONER_NICHE_DATA_TARGET,industrial))
 
 # Stage 3 RL 通用入口: CORR=steprule|beam|beam-div, DIV=bleu|ngram|none,
 # COMBINE=add|mul(默认取 config); 例:

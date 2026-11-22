@@ -30,6 +30,7 @@ from .bleu import DiverBleu
 from .cot_utils import extract_cot, recommendation_match
 from .llmjudge import HistoryLookup, LLMJudge, render_block
 from .neighbor import build_same_user_mask, topk_neighbors
+from .niche import NicheDiversityScorer
 from .shaping import lambda_at, rank_normalize, shape_rewards
 from .similarity import NgramJaccard
 from .user_store import UserEmbeddingStore
@@ -69,6 +70,14 @@ class InterQueryDiversityAddon:
         judge_base_url: str = "http://localhost:8000/v1",
         judge_model: str = "Qwen3-1.7B",
         judge_concurrency: int = 32,
+        niche_dict_path: str = None,
+        niche_lexstats_path: str = None,
+        niche_sif_path: str = None,
+        niche_summary_method: str = "sif",
+        niche_embed_model: str = "BAAI/bge-base-en-v1.5",
+        niche_embed_device: str = "cpu",
+        niche_embed_batch_size: int = 64,
+        niche_encoder=None,
     ):
         """device 仅用于 BxB 邻居矩阵乘, 默认 cpu: reward 在 verl driver
         进程执行, 默认用 cuda 会在 colocated GPU 上建 context 挤占显存。
@@ -93,6 +102,10 @@ class InterQueryDiversityAddon:
         ngram_n: ngram_jaccard 的 n(默认 1)。
         judge_base_url / judge_model / judge_concurrency: llmjudge 的
             OpenAI 兼容服务地址 / served model 名 / 并发上限。
+        niche_*: similarity="niche" 的参数。三个路径缺省时按 user embedding
+            缓存 meta 里的 data_dir 推导(<root>/niche/<Category>/);
+            niche_summary_method: "sif"(默认) | "tfidf"; niche_encoder 供
+            测试/探针注入句向量编码器(生产懒加载 BGE)。
         combine: 正确性 x 多样性合并方式("add" 加法塑形 / "mul" 乘法:
             R' = R * (1 + intrinsic))。
         """
@@ -115,9 +128,29 @@ class InterQueryDiversityAddon:
             data_dir = self.store.meta.get("data_dir", "")
             data_root = os.path.dirname(os.path.dirname(data_dir))
             self.history = HistoryLookup(data_root, self.store.meta["category"])
+        elif self.similarity == "niche":
+            self.scorer = NicheDiversityScorer(
+                niche_dict_path=niche_dict_path or self._default_niche_path(
+                    "popularity.json"
+                ),
+                lexstats_path=niche_lexstats_path or self._default_niche_path(
+                    "cot_lexstats.json"
+                ),
+                summary_method=niche_summary_method,
+                sif_path=niche_sif_path or (
+                    self._default_niche_path("sif_words.npz")
+                    if str(niche_summary_method) == "sif"
+                    else None
+                ),
+                encoder=niche_encoder,
+                embed_model=niche_embed_model,
+                embed_device=niche_embed_device,
+                embed_batch_size=niche_embed_batch_size,
+            )
         else:
             raise ValueError(
-                f"未知 similarity: {similarity!r}(bleu | ngram_jaccard | llmjudge)"
+                f"未知 similarity: {similarity!r}"
+                "(bleu | ngram_jaccard | llmjudge | niche)"
             )
         self.success_mode = str(success_mode)
         if self.success_mode not in ("full", "prefix", "none"):
@@ -182,6 +215,24 @@ class InterQueryDiversityAddon:
         if "index" not in extra_info or "split" not in extra_info:
             return None
         return (str(extra_info["split"]), int(extra_info["index"]))
+
+    def _default_niche_path(self, filename: str) -> str:
+        """niche 离线产物默认路径: <data_root>/niche/<Category>/<filename>。
+
+        依赖 user embedding 缓存 meta 的 data_dir/category; 旧缓存无 meta
+        时报错, 要求显式传 niche_*_path。
+        """
+        data_dir = self.store.meta.get("data_dir", "")
+        category = self.store.meta.get("category", "")
+        if not data_dir or not category:
+            raise ValueError(
+                "niche_*_path 未显式给出且 user embedding 缓存 meta 缺 "
+                "data_dir/category, 无法推导默认路径。请显式传 "
+                "niche_dict_path / niche_lexstats_path / niche_sif_path, "
+                "或重跑 make <dataset>-sidreasoner-user-embed 生成带 meta 的缓存。"
+            )
+        data_root = os.path.dirname(os.path.dirname(data_dir))
+        return os.path.join(data_root, "niche", category, filename)
 
     # ------------------------------------------------------------------ #
 
@@ -303,6 +354,7 @@ class InterQueryDiversityAddon:
 
         # ---- 逐 query 逐 rollout 计算跨用户 TD ----
         llm = self.similarity == "llmjudge"
+        niche = self.similarity == "niche"
         sim_np = neighbor_sim.numpy()
         sims_finite = sim_np[np.isfinite(sim_np)]
         td_values = np.zeros(n, dtype=np.float64)
@@ -327,7 +379,34 @@ class InterQueryDiversityAddon:
             for r in groups[train_keys[q_i]]:
                 results[r]["n_refs"] = len(valid_refs)
 
-        if llm:
+        if niche:
+            # niche 的 c1/c2 不依赖邻居 Reference(即使 K_q=0 也计算,
+            # 只有 c3 归 0), 整 batch 一次性提交(句向量批量前向)
+            niche_jobs = []
+            for q_i, key in enumerate(train_keys):
+                for r in groups[key]:
+                    cot = cots[r]
+                    if cot is None or len(cot.split()) < _MIN_COT_TOKENS:
+                        continue
+                    niche_jobs.append(
+                        (
+                            r,
+                            {
+                                "cot": cot,
+                                "refs": refs_by_query[q_i],
+                                "history_items": histories[q_i],
+                            },
+                        )
+                    )
+            if niche_jobs:
+                pairs = self.scorer.compute_many([it for _, it in niche_jobs])
+                for (r, _), (d, diag) in zip(niche_jobs, pairs):
+                    td_values[r] = float(d)
+                    results[r].update(diag)
+            else:
+                # 本 batch 无可评分 rollout: 清空统计, 避免记录上一批的旧值
+                self.scorer.last_stats = {}
+        elif llm:
             # 全 batch 的 (rollout, reference) 对一次性提交, 吃满 judge 并发
             jobs, pairs = [], []
             for q_i in range(len(train_keys)):
@@ -480,6 +559,11 @@ class InterQueryDiversityAddon:
             "judge_fallback": getattr(self.scorer, "n_fallback", None),
             "elapsed_s": round(m["elapsed"], 3),
         }
+        # niche: 三个分量的均值与可计算率(结构性 0 与真实低分的诊断)
+        niche_stats = getattr(self.scorer, "last_stats", None)
+        if niche_stats:
+            for k, v in niche_stats.items():
+                record[f"niche/{k}"] = v
         os.makedirs(os.path.dirname(os.path.abspath(self.metrics_path)) or ".", exist_ok=True)
         with open(self.metrics_path, "a") as f:
             f.write(json.dumps(record) + "\n")

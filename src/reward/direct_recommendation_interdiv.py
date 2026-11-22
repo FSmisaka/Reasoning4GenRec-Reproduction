@@ -125,6 +125,13 @@ def _get_addon(kwargs: dict):
             judge_base_url=str(kwargs.get("judge_base_url", "http://localhost:8000/v1")),
             judge_model=str(kwargs.get("judge_model", "Qwen3-1.7B")),
             judge_concurrency=int(kwargs.get("judge_concurrency", 32)),
+            niche_dict_path=kwargs.get("niche_dict_path"),
+            niche_lexstats_path=kwargs.get("niche_lexstats_path"),
+            niche_sif_path=kwargs.get("niche_sif_path"),
+            niche_summary_method=str(kwargs.get("niche_summary_method", "sif")),
+            niche_embed_model=str(kwargs.get("niche_embed_model", "BAAI/bge-base-en-v1.5")),
+            niche_embed_device=str(kwargs.get("niche_embed_device", "cpu")),
+            niche_embed_batch_size=int(kwargs.get("niche_embed_batch_size", 64)),
         )
     return _ADDON
 

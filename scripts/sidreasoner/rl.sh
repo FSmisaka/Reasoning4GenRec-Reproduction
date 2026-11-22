@@ -143,6 +143,8 @@ if [[ "${INTER_DIV}" == "True" ]]; then
   read -r IQD_ENC IQD_PATH IQD_K IQD_JAC IQD_LI IQD_LF IQD_DS IQD_GAMMA \
         IQD_SIGMA IQD_DIVLEN IQD_SEED IQD_METRICS IQD_SUCCESS IQD_REF IQD_SMOOTH IQD_TDNORM \
         IQD_SIM IQD_NGRAM_N IQD_COMBINE IQD_JURL IQD_JMODEL IQD_JCONC \
+        IQD_NICHE_DICT IQD_NICHE_LEX IQD_NICHE_SIF IQD_NICHE_METHOD \
+        IQD_NICHE_EMBMODEL IQD_NICHE_EMBDEV IQD_NICHE_EMBBS \
         < <(${PY} - <<'EOF'
 from config import load_config
 import os
@@ -160,7 +162,13 @@ print(enc, path, iqd.get("top_k_neighbors", 8), iqd.get("same_user_jaccard", 0.8
       iqd.get("similarity", "bleu"), iqd.get("ngram_n", 1),
       iqd.get("combine", "add"),
       iqd.get("judge_base_url", "http://localhost:8000/v1"),
-      iqd.get("judge_model", "Qwen3-1.7B"), iqd.get("judge_concurrency", 32))
+      iqd.get("judge_model", "Qwen3-1.7B"), iqd.get("judge_concurrency", 32),
+      iqd.get("niche_dict_path") or f"data/raw/Amazon/niche/{cat}/popularity.json",
+      iqd.get("niche_lexstats_path") or f"data/raw/Amazon/niche/{cat}/cot_lexstats.json",
+      iqd.get("niche_sif_path") or f"data/raw/Amazon/niche/{cat}/sif_words.npz",
+      iqd.get("niche_summary_method", "sif"),
+      iqd.get("niche_embed_model", "BAAI/bge-base-en-v1.5"),
+      iqd.get("niche_embed_device", "cpu"), iqd.get("niche_embed_batch_size", 64))
 EOF
 )
   # metrics_path 用 "-" 占位避免空字段导致 read 变量错位
@@ -171,13 +179,15 @@ EOF
     bleu)                    IQD_SIM="bleu" ;;
     ngram|ngram_jaccard)     IQD_SIM="ngram_jaccard" ;;
     llmjudge|llm_judge)      IQD_SIM="llmjudge" ;;
-    *) echo "错误: 未知 INTER_DIV_METRIC='${INTER_DIV_METRIC}' (可选 bleu | ngram | llmjudge)" >&2; exit 1 ;;
+    niche)                   IQD_SIM="niche" ;;
+    *) echo "错误: 未知 INTER_DIV_METRIC='${INTER_DIV_METRIC}' (可选 bleu | ngram | llmjudge | niche)" >&2; exit 1 ;;
   esac
   case "${IQD_SIM}" in
     bleu)          IQD_METRIC_SUFFIX="bleu" ;;
     ngram_jaccard) IQD_METRIC_SUFFIX="ngram" ;;
     llmjudge)      IQD_METRIC_SUFFIX="llmjudge" ;;
-    *) echo "错误: 未知 similarity='${IQD_SIM}' (可选 bleu | ngram_jaccard | llmjudge)" >&2; exit 1 ;;
+    niche)         IQD_METRIC_SUFFIX="niche" ;;
+    *) echo "错误: 未知 similarity='${IQD_SIM}' (可选 bleu | ngram_jaccard | llmjudge | niche)" >&2; exit 1 ;;
   esac
   # llmjudge 服务参数可被 JUDGE_URL / JUDGE_MODEL / JUDGE_CONCURRENCY 覆盖
   [[ -n "${JUDGE_URL:-}" ]] && IQD_JURL="${JUDGE_URL}"
@@ -202,6 +212,22 @@ EOF
     echo "      先运行: DATASET=${DATASET} make ${DATASET}-sidreasoner-user-embed" >&2
     echo "      (或修改 config/sidreasoner.py 的 rl.inter_query_diversity.user_embedding_path)" >&2
     exit 1
+  fi
+  # niche(小众物品)多样性的离线产物检查(其余度量忽略这些路径)
+  if [[ "${IQD_SIM}" == "niche" ]]; then
+    for f in "${IQD_NICHE_DICT}" "${IQD_NICHE_LEX}"; do
+      if [[ ! -f "${f}" ]]; then
+        echo "错误: 未找到 niche 离线产物 ${f}。" >&2
+        echo "      先运行: DATASET=${DATASET} make ${DATASET}-sidreasoner-niche-data" >&2
+        exit 1
+      fi
+    done
+    if [[ "${IQD_NICHE_METHOD}" == "sif" && ! -f "${IQD_NICHE_SIF}" ]]; then
+      echo "错误: niche_summary_method=sif 但未找到 ${IQD_NICHE_SIF}。" >&2
+      echo "      先运行: DATASET=${DATASET} make ${DATASET}-sidreasoner-niche-data" >&2
+      echo "      (或改 config rl.inter_query_diversity.niche_summary_method=tfidf)" >&2
+      exit 1
+    fi
   fi
   # base reward 类型沿用上方 REWARD 分支的选择(steprule 默认)
   case "${REWARD}" in
@@ -236,6 +262,14 @@ EOF
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.judge_base_url=${IQD_JURL}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.judge_model=${IQD_JMODEL}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.judge_concurrency=${IQD_JCONC}"
+  # niche(小众物品)多样性的离线产物与方法(其他度量忽略)
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_dict_path=$(pwd)/${IQD_NICHE_DICT}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_lexstats_path=$(pwd)/${IQD_NICHE_LEX}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_sif_path=$(pwd)/${IQD_NICHE_SIF}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_summary_method=${IQD_NICHE_METHOD}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_embed_model=${IQD_NICHE_EMBMODEL}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_embed_device=${IQD_NICHE_EMBDEV}"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.niche_embed_batch_size=${IQD_NICHE_EMBBS}"
   if [[ -n "${IQD_METRICS}" ]]; then
     INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.metrics_path=$(pwd)/${IQD_METRICS}"
   fi

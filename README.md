@@ -62,11 +62,16 @@ make games-sidreasoner-rl-beam-ngram     # Rollout-Beam + n-gram 多样性(加�
 
 make games-sidreasoner-rl-beam-llmjudge  # Rollout-Beam + LLM-AS-A-JUDGE(加法合并)
 
+make games-sidreasoner-niche-data        # Niche 多样性的离线预处理(一次性; 见 docs 第 8 节)
+make games-sidreasoner-rl-beam-niche     # Rollout-Beam + Niche 小众物品多样性(默认 SIF 总结句)
+
 # 通用入口(CORR=steprule|beam|beam-div, DIV=bleu|ngram|none, COMBINE=add|mul):
 #   make games-sidreasoner-rl-div CORR=beam DIV=ngram COMBINE=mul
 
 # 挂 tmux 跑:
 make tmux TARGET=games-sidreasoner-sft SESSION=sft-games
+
+tmux new -s rl-beam-llmjudge-games
 
 tmux ls                                # 1. 列出服务器上仍在跑的会话
 tmux attach -t sft                     # 2. 接回对应会话(Ctrl-b d 只退出查看, 不停任务)
@@ -81,6 +86,7 @@ make games-sidreasoner-merge RL_SUFFIX=_steprule_ngram
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_bleu
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_ngram
 make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_llmjudge
+make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_niche
 
 # 4) 思考模式评估 & 计算指标 & 画图
 make games-sidreasoner-think \
