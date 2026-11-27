@@ -53,6 +53,7 @@ SUPPORTED_KEYS = tuple(
     for s in ("mean", "max", "min")
 )
 SUPPORTED_KEYS += ('niche/c1_mean', 'niche/c2_mean','niche/c3_mean')
+SUPPORTED_KEYS += ('td_mean', 'td_success_mean', 'neighbor_sim_mean', 'valid_neighbors_mean')
 
 KEY_ALIASES = {
     "critic/correctness_rewards/mean": "base_reward_mean",
