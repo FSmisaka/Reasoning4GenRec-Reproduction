@@ -898,6 +898,7 @@ def test_entry_logs_resumed_trainer_steps(tmp_path, tmp_store, monkeypatch):
             ground_truths=[r["ground_truth"] for r in rows],
             extra_infos=[r["extra_info"] for r in rows],
             trainer_step=trainer_step,
+            require_trainer_step=True,
             user_embedding_path=str(path),
             metrics_path=str(metrics_path),
             lambda_init=1.0,
@@ -905,7 +906,13 @@ def test_entry_logs_resumed_trainer_steps(tmp_path, tmp_store, monkeypatch):
             decay_steps=10,
         )
 
-    score_batch("test", 900)
+    score_batch("test", None)
+    assert not metrics_path.exists()
+
+    with pytest.raises(RuntimeError, match="trainer_step"):
+        score_batch("train", None)
+    with pytest.raises(RuntimeError, match="trainer_step"):
+        score_batch("train", 0)
     assert not metrics_path.exists()
 
     score_batch("train", 901)

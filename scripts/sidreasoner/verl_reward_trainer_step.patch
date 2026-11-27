@@ -1,0 +1,57 @@
+--- a/verl/trainer/ppo/ray_trainer.py
++++ b/verl/trainer/ppo/ray_trainer.py
+@@ -1221,6 +1221,7 @@
+                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
+ 
+                     with marked_timer("reward", timing_raw, color="yellow"):
++                        batch.meta_info["global_steps"] = self.global_steps
+                         # compute reward model score
+                         if self.use_rm:
+                             reward_tensor = self.rm_wg.compute_rm_score(batch)
+--- a/verl/workers/reward_manager/batch.py
++++ b/verl/workers/reward_manager/batch.py
+@@ -30,14 +30,25 @@
+         num_examine (int): The number of responses to examine.
+         compute_score (callable): The function to compute the rewards.
+         reward_fn_key (str): The key to use for the reward function.
++        pass_trainer_step (bool): Forward the current trainer step to compute_score when available.
+         reward_kwargs (dict): The keyword arguments to pass to the reward function.
+     """
+ 
+-    def __init__(self, tokenizer, num_examine, compute_score, reward_fn_key="data_source", **reward_kwargs):
++    def __init__(
++        self,
++        tokenizer,
++        num_examine,
++        compute_score,
++        reward_fn_key="data_source",
++        *,
++        pass_trainer_step=False,
++        **reward_kwargs,
++    ):
+         self.tokenizer = tokenizer
+         self.num_examine = num_examine
+         self.compute_score = compute_score
+         self.reward_fn_key = reward_fn_key
++        self.pass_trainer_step = pass_trainer_step
+         self.reward_kwargs = reward_kwargs
+ 
+     def verify(self, data):
+@@ -58,13 +69,16 @@
+         ground_truths = [item.non_tensor_batch["reward_model"].get("ground_truth", None) for item in data]
+         data_sources = data.non_tensor_batch[self.reward_fn_key]
+         extras = data.non_tensor_batch.get("extra_info", [None] * len(data))
++        reward_kwargs = self.reward_kwargs
++        if self.pass_trainer_step and "global_steps" in data.meta_info:
++            reward_kwargs = {**reward_kwargs, "trainer_step": data.meta_info["global_steps"]}
+ 
+         scores = self.compute_score(
+             data_sources=data_sources,
+             solution_strs=responses_str,
+             ground_truths=ground_truths,
+             extra_infos=extras,
+-            **self.reward_kwargs,
++            **reward_kwargs,
+         )
+ 
+         return scores

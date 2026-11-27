@@ -253,7 +253,7 @@ $(eval $(call SIDREASONER_TARGET_NGRAM,industrial))
 # Stage 3 RL: Rollout-Beam 正确性 reward + 多样性(前置同 rl-bleu)
 define SIDREASONER_TARGET_BEAM_DIV
 $(1)-sidreasoner-$(3):
-	DATASET=$(1) CUDA_VISIBLE_DEVICES="$(SIDR_GPUS)" bash scripts/sidreasoner/rl_beam_$(2).sh
+	DATASET=$(1) CUDA_VISIBLE_DEVICES="$(SIDR_GPUS)" bash scripts/sidreasoner/rl_beam_$(2).sh $$$${ARGS:-}
 endef
 $(eval $(call SIDREASONER_TARGET_BEAM_DIV,games,bleu,rl-beam-bleu))
 $(eval $(call SIDREASONER_TARGET_BEAM_DIV,office,bleu,rl-beam-bleu))

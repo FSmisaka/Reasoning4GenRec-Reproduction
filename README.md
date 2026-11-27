@@ -165,6 +165,20 @@ git clone --depth 1 https://github.com/HappyPointer/SIDReasoner ../SIDReasoner  
 make tmux TARGET=install-rl-env USE_MEGATRON=0 USE_SGLANG=0   # 跳过用不到的 Megatron/sglang
 ```
 
+启用跨 Query 多样性 reward 时，训练使用的 verl fork 需要转发全局训练步。
+若该 fork 尚未包含此改动，从本仓库根目录运行一次：
+
+```bash
+git -C "${VERL_HOME:-../SIDReasoner}" apply "$PWD/scripts/sidreasoner/verl_reward_trainer_step.patch"
+```
+
+如果通过 `config/sidreasoner.py` 改过 `rl.verl_home`，请使用该路径。
+例如从 `global_step_900` 续跑时，第一条新训练 reward 记录的 `step` 是 `901`。
+
+```bash
+make games-sidreasoner-rl-beam-niche ARGS="trainer.resume_mode=resume_path trainer.resume_from_path=/path/to/global_step_900"
+```
+
 ## Stage 3 奖励变体
 
 三个变体从同一 Stage 2 checkpoint 出发, 产物按实验名后缀完全隔离

@@ -94,6 +94,7 @@ class InterQueryDiversityAddon:
         niche_embed_num_threads: int = 8,
         niche_only_success: bool = True,
         niche_encoder=None,
+        require_trainer_step: bool = False,
     ):
         """device 仅用于 BxB 邻居矩阵乘, 默认 cpu: reward 在 verl driver
         进程执行, 默认用 cuda 会在 colocated GPU 上建 context 挤占显存。
@@ -213,6 +214,7 @@ class InterQueryDiversityAddon:
                 "interdiv_metrics.jsonl",
             )
         self.metrics_path = metrics_path
+        self.require_trainer_step = require_trainer_step
         self._train_steps = 0
         self._tokenizer = None
 
@@ -305,6 +307,13 @@ class InterQueryDiversityAddon:
         if not is_train_batch or len(train_keys) < 2:
             # 验证/测试 batch 或 query 数不足以构成邻居: 只回原始 reward
             return results
+
+        if self.require_trainer_step and (type(trainer_step) is not int or trainer_step < 1):
+            raise RuntimeError(
+                f"训练 reward 缺少有效的 trainer_step (收到 {trainer_step!r})。"
+                "请将 scripts/sidreasoner/verl_reward_trainer_step.patch "
+                "应用到当前训练使用的 VERL_HOME 后重启训练。"
+            )
 
         t_start = time.time()
         batch_step = self._train_steps

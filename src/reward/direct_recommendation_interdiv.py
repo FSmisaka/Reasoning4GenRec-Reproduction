@@ -113,6 +113,7 @@ def _get_addon(kwargs: dict):
             sigma=kwargs.get("sigma", 0.5),
             model_path=kwargs.get("model_path"),
             metrics_path=kwargs.get("metrics_path"),
+            require_trainer_step=_bool(kwargs.get("require_trainer_step"), False),
             log_every=int(kwargs.get("log_every", 1)),
             seed=kwargs.get("seed", 0),
             success_mode=str(kwargs.get("success_mode", "full")),

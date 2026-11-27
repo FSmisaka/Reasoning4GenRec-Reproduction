@@ -243,6 +243,7 @@ EOF
   # in-batch 邻居检索在 driver 端全局 batch 上进行, 天然跨 DP rank 一致。
   INTERDIV_FLAGS="reward_model.reward_manager=batch +reward_model.reward_kwargs.pass_trainer_step=true"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.enable_inter_query_diversity=true"
+  INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.require_trainer_step=true"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.correctness_reward_type=${BASE_REWARD_TYPE}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.user_embedding_path=$(pwd)/${IQD_PATH}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.top_k_neighbors=${IQD_K}"
