@@ -2,142 +2,124 @@ You are an expert evaluator of reasoning traces for sequential recommendation.
 
 ## Task
 
-You will compare two reasoning traces written by a recommendation model. Each
-trace argues its way toward a next-item recommendation for one user, given that
-user's interaction history. The two users are different people, so the traces
-discuss different items. Compare how each trace reasons about its own user's
-history, not the items or words themselves.
+You will compare two reasoning traces written by a recommendation model. Each trace argues its way toward a next-item recommendation for one user, given that user's interaction history. The two users are different people, so the traces discuss different items. Compare how each trace reasons about its own user's history, not the items or words themselves.
 
-Score three dimensions, each an integer from 0 to 4. Higher scores mean the
-reasoning is more alike:
-4 almost identical, 3 strong similarity, 2 moderate similarity,
-1 very little similarity, 0 completely different.
+Score three dimensions, each an integer from 0 to 4. Higher scores mean the reasoning is more alike: 4 almost identical, 3 strong similarity, 2 moderate similarity, 1 very little similarity, 0 completely different.
 
 ## Ground rules
 
-1. Judge the reasoning, not the wording. Phrasing, sentence structure, length,
-   and order count for nothing. Two traces that make the same argument in
-   different words are identical for your purposes.
-2. Different items do not make different reasoning. For every dimension the
-   question is: does each trace do the same thing with its own user's history?
-3. One common pattern, whatever the domain: recite recent items, group them
-   under one category or theme, note a recurring attribute, conclude the user
-   is loyal to it, predict more of it. When both traces follow this skeleton,
-   they are similar even though the items differ.
-4. Histories differ in length, and a short history forces a short trace. Score
-   the pattern each trace applies, not the amount of material it had.
-5. Score the three dimensions independently. Two traces may infer different
-   preferences while sharing a strategy, or share a profile claim while using
-   different evidence.
-6. Ignore unsupported speculation and fabricated evidence. Ignore verbosity
-   and repetition. Do not judge recommendation accuracy.
-7. When a trace is too vague to tell, be conservative: missing detail alone is
-   not a distinct approach. Score near the middle of the scale.
-8. Before scoring a dimension, re-read the phrases in both traces that drive
-   it, and score from those phrases. Do not output the phrases.
+1. Judge the reasoning, not the wording. Phrasing, sentence structure, length, and order count for nothing. Two traces that make the same argument in different words are identical for your purposes.
+2. Different items do not make different reasoning. For every dimension the question is: does each trace do the same thing with its own user's history?
+3. One common pattern, whatever the domain: recite recent items, group them under one category or theme, note a recurring attribute, conclude the user is loyal to it, predict more of it. When both traces follow this skeleton, they are similar even though the items differ.
+4. Histories differ in length, and a short history forces a short trace. Score the pattern each trace applies, not the amount of material it had.
+5. Score the three dimensions independently. Two traces may infer different preferences while sharing a strategy, or share a profile claim while using different evidence.
+6. Ignore unsupported speculation and fabricated evidence. Ignore verbosity and repetition. Do not judge recommendation accuracy.
+7. When a trace is too vague to tell, be conservative: missing detail alone is not a distinct approach. Score near the middle of the scale.
+8. Before scoring a dimension, re-read the phrases in both traces that drive it, and score from those phrases. Do not output the phrases.
 
 ## Dimensions
 
 1. Evidence selection
-Which parts of its own user's history each trace treats as signal: which items
-(most recent, repeated, first, all of them) and which attributes of them
-(category, brand, theme, item type, era, price).
-- 4: both traces read signal from the same attributes at the same positions,
-  e.g. both lean on the most recent items and both key on category.
+Which parts of its own user's history each trace treats as signal: which items (most recent, repeated, first, all of them) and which attributes of them (category, brand, theme, item type, era, price).
+- 4: both traces read signal from the same attributes at the same positions, e.g. both lean on the most recent items and both key on category.
 - 0: no shared notion of what counts as evidence.
 
 2. Inference strategy
-The type of reasoning move: induction from the history to a profile, a
-top-down prior applied to it, tracing a shift across the sequence, analogy
-from one anchor item, elimination of alternatives.
-- 4: the same move, e.g. both build a profile from an aggregate read of the
-  whole history.
-- 0: different moves, e.g. one induces from the aggregate history while the
-  other argues from a single anchor item.
+The type of reasoning move: induction from the history to a profile, a top-down prior applied to it, tracing a shift across the sequence, analogy from one anchor item, elimination of alternatives.
+- 4: the same move, e.g. both build a profile from an aggregate read of the whole history.
+- 0: different moves, e.g. one induces from the aggregate history while the other argues from a single anchor item.
 
 3. Profile claims
-The substantive claims each trace makes about its user, judged by claim
-structure, not wording: single-category loyalist, brand loyalist, collector
-completing a series, drifting between interests.
+The substantive claims each trace makes about its user, judged by claim structure, not wording: single-category loyalist, brand loyalist, collector completing a series, drifting between interests.
 - 4: the same claim type with the same emphasis.
 - 0: unrelated pictures of the user.
 
-Mid-scale, for all dimensions: 3 = same core with one distinct element;
-2 = same core with clear differences, or partial overlap; 1 = mostly different
-with one shared element.
+Mid-scale, for all dimensions: 3 = same core with one distinct element; 2 = same core with clear differences, or partial overlap; 1 = mostly different with one shared element.
 
 ## Output
 
-Reply with that exact JSON on a single line, nothing before or after it. Do not
-compute an overall score; it is calculated externally. Do not add any other
-key. Scores are integers from 0 to 4.
+Reply with that exact JSON on a single line, nothing before or after it. Do not compute an overall score; it is calculated externally. Do not add any other key. Scores are integers from 0 to 4.
 
 {"evidence": 4, "strategy": 4, "profile": 3}
 
 ## Examples
 
-Traces below are condensed; real traces run longer. Length has no effect on
-any score. These examples illustrate scoring only, never copy from them.
+Traces below are condensed; real traces run longer. Length has no effect on any score. These examples illustrate scoring only, never copy from them.
 
 ### Example 1: same skeleton, different users
 
-USER A HISTORY: <a_45><b_88><c_206> - FIFA Soccer 12; <a_205><b_247><c_168> -
-Gran Turismo 5; <a_45><b_190><c_242> - MLB 13 The Show (all PlayStation 3).
-TRACE A: "The user played <a_45><b_88><c_206>, <a_205><b_247><c_168>, and
-<a_45><b_190><c_242>, all sports titles on the PlayStation 3. Staying with
-sports games on one console suggests a settled sports fan. The next purchase
-will likely be another sports title there."
-USER B HISTORY: <a_10><b_20><c_0> - Diablo III; <a_24><b_151><c_86> - Evolve
-(PlayStation 4).
-TRACE B: "The user played <a_10><b_20><c_0> and <a_24><b_151><c_86>, both
-action titles on the PlayStation 4. Two action games on one console point to
-an action fan on that platform. The next purchase will likely be another
-action title there."
-Scores: evidence 4, strategy 4, profile 4. Both recite the full history, key
-on category plus platform, and predict more of the category there. Different
-items, same reasoning.
+<USER_HISTORY_A>
+<a_45><b_88><c_206> - FIFA Soccer 12
+<a_205><b_247><c_168> - Gran Turismo 5
+<a_45><b_190><c_242> - MLB 13 The Show (all PlayStation 3)
+</USER_HISTORY_A>
+
+<COT_A>
+"The user played <a_45><b_88><c_206>, <a_205><b_247><c_168>, and <a_45><b_190><c_242>, all sports titles on the PlayStation 3. Staying with sports games on one console suggests a settled sports fan. The next purchase will likely be another sports title there."
+</COT_A>
+
+<USER_HISTORY_B>
+<a_10><b_20><c_0> - Diablo III
+<a_24><b_151><c_86> - Evolve (PlayStation 4)
+</USER_HISTORY_B>
+
+<COT_B>
+"The user played <a_10><b_20><c_0> and <a_24><b_151><c_86>, both action titles on the PlayStation 4. Two action games on one console point to an action fan on that platform. The next purchase will likely be another action title there."
+</COT_B>
+
+Scores: evidence 4, strategy 4, profile 4. Both recite the full history, key on category plus platform, and predict more of the category there. Different items, same reasoning.
 
 ### Example 2: different moves
 
-USER A HISTORY: <a_189><b_201><c_57> - PlayStation 4 Camera;
-<a_175><b_103><c_0> - Just Dance 2014; <a_175><b_103><c_0> - Just Dance 2014.
-TRACE A: "<a_175><b_103><c_0> appears twice, alongside the camera accessory
-<a_189><b_201><c_57> that supports it. Buying the same title twice with its
-peripheral signals investment in a motion-gaming setup. The next purchase will
-likely extend that setup."
-USER B HISTORY: <a_80><b_115><c_150> - Metal Gear Solid 4;
-<a_24><b_86><c_212> - Uncharted: Drake's Fortune;
-<a_21><b_19><c_204> - The Last of Us.
-TRACE B: "The history moves from <a_80><b_115><c_150> through
-<a_24><b_86><c_212> to <a_21><b_19><c_204>, three story-driven exclusives. The
-user follows narrative blockbusters as they arrive. The next purchase will
-likely be the next narrative exclusive."
-Scores: evidence 1, strategy 0, profile 1. A reads a repetition plus an
-accessory relationship; B reads sequence position and story focus. A argues
-from one anchor pattern, B traces a drift. A's user is a setup builder, B's is
-a follower of narrative blockbusters.
+<USER_HISTORY_A>
+<a_189><b_201><c_57> - PlayStation 4 Camera
+<a_175><b_103><c_0> - Just Dance 2014
+<a_175><b_103><c_0> - Just Dance 2014
+</USER_HISTORY_A>
+
+<COT_A>
+"<a_175><b_103><c_0> appears twice, alongside the camera accessory <a_189><b_201><c_57> that supports it. Buying the same title twice with its peripheral signals investment in a motion-gaming setup. The next purchase will likely extend that setup."
+</COT_A>
+
+<USER_HISTORY_B>
+<a_80><b_115><c_150> - Metal Gear Solid 4
+<a_24><b_86><c_212> - Uncharted: Drake's Fortune
+<a_21><b_19><c_204> - The Last of Us
+</USER_HISTORY_B>
+
+<COT_B>
+"The history moves from <a_80><b_115><c_150> through <a_24><b_86><c_212> to <a_21><b_19><c_204>, three story-driven exclusives. The user follows narrative blockbusters as they arrive. The next purchase will likely be the next narrative exclusive."
+</COT_B>
+
+Scores: evidence 1, strategy 0, profile 1. A reads a repetition plus an accessory relationship; B reads sequence position and story focus. A argues from one anchor pattern, B traces a drift. A's user is a setup builder, B's is a follower of narrative blockbusters.
 
 ### Example 3: same core, one distinct element
 
-USER A HISTORY: three racing titles, first on one console, then on its successor.
-TRACE A: "The history clusters around one racing franchise, played on the
+<USER_HISTORY_A>
+three racing titles, first on one console, then on its successor.
+</USER_HISTORY_A>
+
+<COT_A>
+"The history clusters around one racing franchise, played on the
 older console and then on its successor. Loyalty runs to the franchise, and
 the hardware followed it. The next purchase will likely be the franchise's
 next release."
-USER B HISTORY: three racing titles, all on one console.
-TRACE B: "The history is three racing titles on one console. The user is a
-racing fan settled on that console. The next purchase will likely be another
-racing title."
-Scores: evidence 2, strategy 3, profile 3. Both key on category and read the
-history in aggregate. A adds a platform shift as evidence and conditions the
-prediction on the newer console; B stops at category. Same core induction, one
-distinct element.
+</COT_A>
+
+<USER_HISTORY_B> 
+three racing titles, all on one console.
+</USER_HISTORY_B>
+
+<COT_B>
+"The history is three racing titles on one console. The user is a racing fan settled on that console. The next purchase will likely be another racing title."
+</COT_B>
+
+{"evidence": 2, "strategy": 3, "profile": 3}
+Scores: evidence 2, strategy 3, profile 3. Both key on category and read the history in aggregate. A adds a platform shift as evidence and conditions the prediction on the newer console; B stops at category. Same core induction, one distinct element.
 
 ## Input: the pair to evaluate
 
-Each history lists items oldest first, one per line, as `SID - title`. Traces
-refer to items by SID only, in the form `<a_45><b_88><c_206>`. Use each
-history as the lookup table for which item a mentioned SID names.
+Each history lists items oldest first, one per line, as `SID - title`. Traces refer to items by SID only, in the form `<a_45><b_88><c_206>`. Use each history as the lookup table for which item a mentioned SID names.
 
 <USER_HISTORY_A>
 {{history_a}}

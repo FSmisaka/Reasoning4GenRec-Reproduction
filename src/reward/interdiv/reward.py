@@ -14,9 +14,8 @@
    R' = R + lambda(t) * I * clip(gamma^T * d, 0, sigma),
    仅对 split == 'train' 的 batch 生效(验证集只算原始 reward)。
 
-lambda(t) 用的训练步数由本模块内部计数(每次 train batch 调用 +1,
-验证调用不计数); 进程重启后从 0 重新计数(无 checkpoint 语义, 已知
-限制, 见 README/交付说明)。
+lambda(t) 使用进程内的训练 batch 计数。指标日志优先使用 verl 当前训练步，
+未传入训练步的直接调用使用进程内计数。
 """
 
 import json
@@ -262,13 +261,14 @@ class InterQueryDiversityAddon:
 
     # ------------------------------------------------------------------ #
 
-    def compute_batch(self, rows: list, base_rewards: list) -> list:
+    def compute_batch(self, rows: list, base_rewards: list, *, trainer_step: int | None = None) -> list:
         """对整个 batch 计算增广 reward。
 
         Args:
             rows: 每条 rollout 的 {data_source, solution_str, ground_truth,
                 extra_info}(来自 verl BatchRewardManager)。
             base_rewards: 逐行原始推荐 reward(保持不变)。
+            trainer_step: verl 当前训练步，用于日志横轴。
 
         Returns:
             长度 == len(rows) 的 list[dict]: {"score": 增广 reward,
@@ -307,8 +307,8 @@ class InterQueryDiversityAddon:
             return results
 
         t_start = time.time()
-        step = self._train_steps
-        lam = lambda_at(step, self.lambda_init, self.lambda_final, self.decay_steps)
+        batch_step = self._train_steps
+        lam = lambda_at(batch_step, self.lambda_init, self.lambda_final, self.decay_steps)
 
         # ---- 用户表征与邻居检索(按去重后的 query) ----
         embeddings, histories, user_ids = self.store.lookup(train_keys)
@@ -527,7 +527,7 @@ class InterQueryDiversityAddon:
 
         self._train_steps += 1
         self._log_metrics(
-            step=step,
+            step=trainer_step if trainer_step is not None else batch_step,
             lam=lam,
             n_queries=len(train_keys),
             n_rollouts=len(train_rows),

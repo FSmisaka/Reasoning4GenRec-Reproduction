@@ -12,6 +12,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -880,6 +881,38 @@ def test_entry_enabled_matches_addon(tmp_path, tmp_store):
     assert any(r["intrinsic"] > 0 for r in out if r["success"])
     for r in out:
         assert r["score"] == pytest.approx(r["base_reward"] + r["intrinsic"])
+
+
+def test_entry_logs_resumed_trainer_steps(tmp_path, tmp_store, monkeypatch):
+    path, _, _ = tmp_store(n=2, dim=4)
+    mod = _load_entry()
+    computer = SimpleNamespace(compute=lambda **kwargs: 0.5)
+    monkeypatch.setattr(mod, "_get_base_computer", lambda kwargs: (computer, None))
+    metrics_path = tmp_path / "resumed_metrics.jsonl"
+
+    def score_batch(split, trainer_step):
+        rows = _make_batch([(split, 0, "puzzle"), (split, 1, "racing")])
+        mod.rule_base_reward(
+            data_sources=[r["data_source"] for r in rows],
+            solution_strs=[r["solution_str"] for r in rows],
+            ground_truths=[r["ground_truth"] for r in rows],
+            extra_infos=[r["extra_info"] for r in rows],
+            trainer_step=trainer_step,
+            user_embedding_path=str(path),
+            metrics_path=str(metrics_path),
+            lambda_init=1.0,
+            lambda_final=0.0,
+            decay_steps=10,
+        )
+
+    score_batch("test", 900)
+    assert not metrics_path.exists()
+
+    score_batch("train", 901)
+    score_batch("train", 902)
+    records = [json.loads(line) for line in metrics_path.read_text().splitlines()]
+    assert [record["step"] for record in records] == [901, 902]
+    assert [record["lambda"] for record in records] == pytest.approx([1.0, 0.9])
 
 
 def test_entry_correctness_type_alias_and_combine(tmp_path, tmp_store):

@@ -72,6 +72,12 @@ make games-sidreasoner-rl-beam-niche     # Rollout-Beam + Niche 小众物品多�
 make tmux TARGET=games-sidreasoner-sft SESSION=sft-games
 
 tmux new -s rl-beam-llmjudge-games
+ctrl+b ,      # 改名 (judge)
+CUDA_VISIBLE_DEVICES=0 vllm serve ../Qwen3-1.7B --served-model-name Qwen3-1.7B --port 8000
+Ctrl-b c      # 开新窗口
+ctrl+b ,      # 改名 (train)
+CUDA_VISIBLE_DEVICES=1 make games-sidreasoner-rl-beam-llmjudge
+Ctrl-b 0 / 1  # 切换窗口
 
 tmux ls                                # 1. 列出服务器上仍在跑的会话
 tmux attach -t sft                     # 2. 接回对应会话(Ctrl-b d 只退出查看, 不停任务)
@@ -91,6 +97,11 @@ make games-sidreasoner-merge RL_SUFFIX=_rolloutbeam_niche
 # 4) 思考模式评估 & 计算指标 & 画图
 make games-sidreasoner-think \
     MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B/global_step_100/actor_merged
+
+tmux new-session -d -s think-beam \
+'CUDA_VISIBLE_DEVICES=1 DATASET=games FROM=100 TO=1900 bash scripts/sidreasoner/think_sweep.sh \
+checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam'
+
 make games-sidreasoner-metrics         # 自动取最新 think 结果, 可用 RESULT=xxx.json 指定
 make games-sidreasoner-curves          # 默认画全部: NDCG@5/10, HR@5/10
 make games-sidreasoner-reward-curves   # Stage 3 reward 组成曲线(正确性/多样性/总 reward)

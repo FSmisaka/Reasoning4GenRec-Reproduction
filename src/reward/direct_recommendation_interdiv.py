@@ -145,6 +145,7 @@ def rule_base_reward(
     solution_strs=None,
     ground_truths=None,
     extra_infos=None,
+    trainer_step: int | None = None,
     **kwargs,
 ):
     """verl BatchRewardManager 兼容入口(返回 list[float] 或 list[dict])。
@@ -190,4 +191,5 @@ def rule_base_reward(
             for i in range(n)
         ],
         base_rewards=base_rewards,
+        trainer_step=trainer_step,
     )

@@ -52,6 +52,8 @@ SUPPORTED_KEYS = tuple(
     for g in ("correctness", "diversity", "total")
     for s in ("mean", "max", "min")
 )
+SUPPORTED_KEYS += ('niche/c1_mean', 'niche/c2_mean','niche/c3_mean')
+
 KEY_ALIASES = {
     "critic/correctness_rewards/mean": "base_reward_mean",
     "critic/diversity_rewards/mean": "intrinsic_mean",
@@ -64,18 +66,38 @@ KEY_ALIASES = {
 # (实验后缀 = _<corr>_<div>, 如 _steprule_ngram / _rolloutbeam_bleu)
 # 通配(兼容 _own 等 SID 后缀); 多个匹配取最新修改的文件。
 DEFAULT_SERIES = [
-    {"label": "Correctness (StepRule x n-gram)", "exp": "_steprule_ngram",
-     "key": "critic/correctness_rewards/mean", "color": C_BLUE, "ls": "-", "marker": "o"},
-    {"label": "Diversity (StepRule x n-gram)", "exp": "_steprule_ngram",
-     "key": "critic/diversity_rewards/mean", "color": C_RED, "ls": "--", "marker": "s"},
-    {"label": "Total (StepRule x n-gram)", "exp": "_steprule_ngram",
-     "key": "critic/total_rewards/mean", "color": C_GRAY, "ls": "-.", "marker": "^"},
+    {"label": "niche1", "exp": "_rolloutbeam_niche",
+     "key": "niche/c1_mean", "color": C_RED, "ls": "-", "marker": None},
+    {"label": "niche2", "exp": "_rolloutbeam_niche",
+     "key": "niche/c2_mean", "color": C_BLUE, "ls": "-", "marker": None},
+    {"label": "niche3", "exp": "_rolloutbeam_niche",
+     "key": "niche/c3_mean", "color": C_GRAY, "ls": "-", "marker": None},
+]
+
+'''
+DEFAULT_SERIES = [
     {"label": "Correctness (Beam x n-gram)", "exp": "_rolloutbeam_ngram",
      "key": "critic/correctness_rewards/mean", "color": C_BLUE, "ls": ":", "marker": "v"},
     {"label": "Diversity (Beam x n-gram)", "exp": "_rolloutbeam_ngram",
      "key": "critic/diversity_rewards/mean", "color": C_RED, "ls": ":", "marker": "D"},
-]
+    {"label": "Total (Beam x n-gram)", "exp": "_rolloutbeam_ngram",
+     "key": "critic/total_rewards/mean", "color": C_GRAY, "ls": "-.", "marker": "^"},
 
+    {"label": "Correctness (Beam x llmjudge)", "exp": "_rolloutbeam_llmjudge",
+     "key": "critic/correctness_rewards/mean", "color": C_BLUE, "ls": "-", "marker": None},
+    {"label": "Diversity (Beam x llmjudge)", "exp": "_rolloutbeam_llmjudge",
+     "key": "critic/diversity_rewards/mean", "color": C_RED, "ls": "-", "marker": None},
+    {"label": "Total (Beam x llmjudge)", "exp": "_rolloutbeam_llmjudge",
+     "key": "critic/total_rewards/mean", "color": C_GRAY, "ls": "-", "marker": None},
+
+    {"label": "Correctness (Beam x niche)", "exp": "_rolloutbeam_niche",
+     "key": "critic/correctness_rewards/mean", "color": C_BLUE, "ls": "-", "marker": None},
+    {"label": "Diversity (Beam x niche)", "exp": "_rolloutbeam_niche",
+     "key": "critic/diversity_rewards/mean", "color": C_RED, "ls": "-", "marker": None},
+    {"label": "Total (Beam x niche)", "exp": "_rolloutbeam_niche",
+     "key": "critic/total_rewards/mean", "color": C_GRAY, "ls": "-", "marker": None},
+]
+'''
 
 def setup_style():
     """印刷尺寸优先的样式(与 sidreasoner_rl_curves.py 完全一致)。"""

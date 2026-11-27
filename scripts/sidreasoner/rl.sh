@@ -241,7 +241,7 @@ EOF
   REWARD_PATH="$(pwd)/src/reward/direct_recommendation_interdiv.py"
   # batch reward manager: 把 B(query) x G(rollout) 一次性传给 reward,
   # in-batch 邻居检索在 driver 端全局 batch 上进行, 天然跨 DP rank 一致。
-  INTERDIV_FLAGS="reward_model.reward_manager=batch"
+  INTERDIV_FLAGS="reward_model.reward_manager=batch +reward_model.reward_kwargs.pass_trainer_step=true"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.enable_inter_query_diversity=true"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.correctness_reward_type=${BASE_REWARD_TYPE}"
   INTERDIV_FLAGS="${INTERDIV_FLAGS} +custom_reward_function.reward_kwargs.user_embedding_path=$(pwd)/${IQD_PATH}"
