@@ -263,7 +263,10 @@ class InterQueryDiversityAddon:
 
     # ------------------------------------------------------------------ #
 
-    def compute_batch(self, rows: list, base_rewards: list, *, trainer_step: int | None = None) -> list:
+    def compute_batch(
+        self, rows: list, base_rewards: list, *, trainer_step: int | None = None,
+        probe: bool = False,
+    ) -> list:
         """对整个 batch 计算增广 reward。
 
         Args:
@@ -271,6 +274,8 @@ class InterQueryDiversityAddon:
                 extra_info}(来自 verl BatchRewardManager)。
             base_rewards: 逐行原始推荐 reward(保持不变)。
             trainer_step: verl 当前训练步，用于日志横轴。
+            probe: 允许评测 split，返回参考和逐对距离，用 trainer_step
+                （默认 0）固定塑形权重，并跳过训练日志。
 
         Returns:
             长度 == len(rows) 的 list[dict]: {"score": 增广 reward,
@@ -302,13 +307,18 @@ class InterQueryDiversityAddon:
                 )
             groups.setdefault(key, []).append(i)
 
-        train_keys = [k for k in groups if k[0] == "train"]
-        is_train_batch = len(train_keys) == len(groups) and len(train_keys) > 0
-        if not is_train_batch or len(train_keys) < 2:
+        keys = list(groups)
+        splits = {key[0] for key in keys}
+        if probe:
+            if len(splits) != 1:
+                raise ValueError("离线 probe 的单个 batch 必须来自同一个 split。")
+        elif splits != {"train"} or len(keys) < 2:
             # 验证/测试 batch 或 query 数不足以构成邻居: 只回原始 reward
             return results
 
-        if self.require_trainer_step and (type(trainer_step) is not int or trainer_step < 1):
+        if self.require_trainer_step and not probe and (
+            type(trainer_step) is not int or trainer_step < 1
+        ):
             raise RuntimeError(
                 f"训练 reward 缺少有效的 trainer_step (收到 {trainer_step!r})。"
                 "请将 scripts/sidreasoner/verl_reward_trainer_step.patch "
@@ -316,11 +326,11 @@ class InterQueryDiversityAddon:
             )
 
         t_start = time.time()
-        batch_step = self._train_steps
+        batch_step = (trainer_step or 0) if probe else self._train_steps
         lam = lambda_at(batch_step, self.lambda_init, self.lambda_final, self.decay_steps)
 
         # ---- 用户表征与邻居检索(按去重后的 query) ----
-        embeddings, histories, user_ids = self.store.lookup(train_keys)
+        embeddings, histories, user_ids = self.store.lookup(keys)
         import torch
 
         user_emb = torch.as_tensor(embeddings, dtype=torch.float32)
@@ -337,7 +347,7 @@ class InterQueryDiversityAddon:
         prefix_lens: dict = {}
         success_flags: dict = {}
         cots: dict = {}
-        for q_i, key in enumerate(train_keys):
+        for key in keys:
             for r in groups[key]:
                 row = rows[r]
                 parsed, plen = recommendation_match(
@@ -370,11 +380,11 @@ class InterQueryDiversityAddon:
             reference_mode=prefix: 首层 code 匹配即可;
             reference_mode=none:   退回任一可解析 CoT(优先级 full > prefix > any)。
             """
-            full_pool = [cots[r] for r in row_ids if _usable(r) and prefix_lens[r] >= 3]
+            full_pool = [r for r in row_ids if _usable(r) and prefix_lens[r] >= 3]
             prefix_pool = [
-                cots[r] for r in row_ids if _usable(r) and prefix_lens[r] >= 1
+                r for r in row_ids if _usable(r) and prefix_lens[r] >= 1
             ]
-            any_pool = [cots[r] for r in row_ids if _usable(r)]
+            any_pool = [r for r in row_ids if _usable(r)]
             if self.reference_mode == "full":
                 pool = full_pool
             elif self.reference_mode == "prefix":
@@ -384,7 +394,7 @@ class InterQueryDiversityAddon:
             return self.rng.choice(pool) if pool else None
 
         references = {
-            q_i: pick_reference(groups[key]) for q_i, key in enumerate(train_keys)
+            q_i: pick_reference(groups[key]) for q_i, key in enumerate(keys)
         }
 
         # ---- 逐 query 逐 rollout 计算跨用户 TD ----
@@ -395,8 +405,18 @@ class InterQueryDiversityAddon:
         td_values = np.zeros(n, dtype=np.float64)
         valid_neighbor_counts = []
         refs_by_query = []
-        for q_i in range(len(train_keys)):
+
+        def judge_history(key, row_index):
+            if probe and "history" in rows[row_index]:
+                return [
+                    f"{item['sid']} - {item['title']}"
+                    for item in rows[row_index]["history"]
+                ]
+            return self.history.lines(*key)
+
+        for q_i in range(len(keys)):
             valid_refs: list = []
+            details = []
             for slot in range(neighbor_idx.shape[1]):
                 nb = int(neighbor_idx[q_i, slot])
                 if nb < 0:
@@ -405,27 +425,34 @@ class InterQueryDiversityAddon:
                 if ref is not None:
                     # llmjudge: 渲染成带邻居用户历史的块
                     valid_refs.append(
-                        render_block(self.history.lines(*train_keys[nb]), ref)
+                        render_block(judge_history(keys[nb], ref), cots[ref])
                         if llm
-                        else ref
+                        else cots[ref]
                     )
+                    if probe:
+                        details.append({
+                            "row_index": ref,
+                            "user_similarity": float(sim_np[q_i, slot]),
+                        })
             refs_by_query.append(valid_refs)
             valid_neighbor_counts.append(len(valid_refs))
-            for r in groups[train_keys[q_i]]:
+            for r in groups[keys[q_i]]:
                 results[r]["n_refs"] = len(valid_refs)
+                if probe:
+                    results[r]["references"] = [dict(detail) for detail in details]
 
         if niche:
             # 先给所有 train 行补默认诊断键, 保证同一 batch 内逐行 dict 的
             # 键集完全一致(verl 按 key 聚合为等长数组; 未评分 rollout 若缺
             # 键会导致 batch size 断言失败)
-            for key in train_keys:
+            for key in keys:
                 for r in groups[key]:
                     for k, v in _NICHE_DIAG_DEFAULTS.items():
                         results[r].setdefault(k, v)
             # niche 的 c1/c2 不依赖邻居 Reference(即使 K_q=0 也计算,
             # 只有 c3 归 0), 整 batch 一次性提交(句向量批量前向)
             niche_jobs = []
-            for q_i, key in enumerate(train_keys):
+            for q_i, key in enumerate(keys):
                 for r in groups[key]:
                     # 失败 rollout 的 intrinsic 恒为 0(I=0), d 用不到;
                     # 默认跳过它们的 c1/c2/c3(主要成本是 BGE 句向量)
@@ -455,11 +482,11 @@ class InterQueryDiversityAddon:
         elif llm:
             # 全 batch 的 (rollout, reference) 对一次性提交, 吃满 judge 并发
             jobs, pairs = [], []
-            for q_i in range(len(train_keys)):
+            for q_i in range(len(keys)):
                 if not refs_by_query[q_i]:
                     continue
-                hist_lines = self.history.lines(*train_keys[q_i])
-                for r in groups[train_keys[q_i]]:
+                hist_lines = judge_history(keys[q_i], groups[keys[q_i]][0])
+                for r in groups[keys[q_i]]:
                     cot = cots[r]
                     if cot is None or len(cot.split()) < _MIN_COT_TOKENS:
                         continue
@@ -471,20 +498,24 @@ class InterQueryDiversityAddon:
                     jobs.append((r, len(refs_by_query[q_i]), start))
             sims = self.scorer.similarities(pairs) if pairs else []
             for r, k, start in jobs:
-                td_values[r] = float(np.mean([1.0 - s for s in sims[start : start + k]]))
+                distances = [1.0 - s for s in sims[start : start + k]]
+                td_values[r] = float(np.mean(distances))
+                if probe:
+                    for detail, distance in zip(results[r]["references"], distances):
+                        detail["td"] = float(distance)
         else:
-            for q_i in range(len(train_keys)):
+            for q_i in range(len(keys)):
                 if not refs_by_query[q_i]:
                     continue
-                for r in groups[train_keys[q_i]]:
+                for r in groups[keys[q_i]]:
                     cot = cots[r]
                     if cot is None or len(cot.split()) < _MIN_COT_TOKENS:
                         continue
-                    td_values[r] = float(
-                        np.mean(
-                            [self.scorer.diversity(cot, ref) for ref in refs_by_query[q_i]]
-                        )
-                    )
+                    distances = [self.scorer.diversity(cot, ref) for ref in refs_by_query[q_i]]
+                    td_values[r] = float(np.mean(distances))
+                    if probe:
+                        for detail, distance in zip(results[r]["references"], distances):
+                            detail["td"] = float(distance)
 
         # 保留原始 TD 供回报/诊断(intrinsic 用可能归一化后的值)
         td_raw = td_values.copy()
@@ -492,7 +523,7 @@ class InterQueryDiversityAddon:
         # ---- 可选: 组内秩归一化(仅重排"可塑形"的 rollout, 保证 GRPO 组内
         # 区分度; 均值固定为 0.5 分布, 不引入组内常数平移) ----
         if self.td_norm == "rank":
-            for key in train_keys:
+            for key in keys:
                 rows_q = groups[key]
                 eligible = [
                     r for r in rows_q
@@ -508,7 +539,7 @@ class InterQueryDiversityAddon:
                     td_values[r] = float(v)
 
         # ---- 塑形(只作用于本 batch 的 train 行) ----
-        train_rows = [r for key in train_keys for r in groups[key]]
+        train_rows = [r for key in keys for r in groups[key]]
         base_arr = np.array([base_rewards[r] for r in train_rows], dtype=np.float64)
         success_arr = np.array([success_flags[r] for r in train_rows], dtype=bool)
         td_arr = td_values[train_rows]
@@ -534,11 +565,14 @@ class InterQueryDiversityAddon:
             results[r]["intrinsic"] = float(intrinsic[j])
             results[r]["score"] = float(augmented[j])
 
+        if probe:
+            return results
+
         self._train_steps += 1
         self._log_metrics(
             step=trainer_step if trainer_step is not None else batch_step,
             lam=lam,
-            n_queries=len(train_keys),
+            n_queries=len(keys),
             n_rollouts=len(train_rows),
             base_rewards=base_arr,
             success_arr=success_arr,

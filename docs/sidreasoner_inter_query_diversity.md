@@ -348,25 +348,50 @@ make games-sidreasoner-rl
 
 ---
 
-## 7. 组内区分度探针(reward 通用验证工具)
+## 7. 离线 reward 探针
 
-`src/eval/sidreasoner_reward_probe.py`: 采样一个 batch(B query x G rollout,
-vLLM 温度采样, 默认策略 = Stage 2 checkpoint), 调用任意 reward 入口, 逐组
-报告每条 rollout 的 score / base_reward / success / td / intrinsic 与组内
-std、零方差组占比、组内 CoT 成对 BLEU 相似度(CoT 坍缩诊断)。
+先在 GPU 上生成一次 Stage 2 测试 rollout 缓存，再复用缓存计算不同奖励。
+生成使用 Stage 3 测试 parquet 和训练式采样，每个 query 采样 16 条。
+缓存保留原样本键、训练 batch 口径的分组、完整回复、按顺序排列的 SID beam 候选、
+真实 SID 和输入历史（从 parquet prompt 取 SID，从物品目录取 title）。
 
 ```bash
-make games-sidreasoner-reward-probe                      # 默认 --reward bleu
-make games-sidreasoner-reward-probe ARGS="--reward ngram"   # n-gram Jaccard 度量
-make games-sidreasoner-reward-probe ARGS="--reward steprule"
-make games-sidreasoner-reward-probe ARGS="--batch-json <旧探针输出>"   # 复用 batch 换 reward 重测
-make games-sidreasoner-reward-probe ARGS="--reward custom --reward-entry <入口.py> --reward-kwargs k=v"  # 新 reward
+make games-sidreasoner-rollout-cache
+make games-sidreasoner-reward-probe ARGS="--reward ngram --correctness rollout-beam --ngram-n 2"
+make games-sidreasoner-reward-probe ARGS="--reward ngram --correctness rollout-beam --ngram-n 3"
+make games-sidreasoner-reward-probe ARGS="--reward ngram --ngram-n 3"
 ```
 
-输出 `results/reward_probe/<Category>_stage3_rl_<label>_probe.json`(命名对齐
-Stage 3 实验名后缀), 内含 `batch.rows` 可直接被 `--batch-json` 复用。
-局限: 依赖 rollout 侧 beam search 的 reward(rollout_beam 族)无法用本工具
-生成, 需提供带 `beam_search_results` 的 batch。
+默认缓存路径为 `data/sidreasoner_rollouts/<Category>_stage2_test.jsonl`，
+报告写入 `results/reward_probe/`，文件名含正确性奖励（若指定）和 n-gram 阶数。
+可用 `--out` 指定两种输出位置，用探针的 `--cache` 指定输入缓存。
+生成时可用 `--n-queries 8 --out <路径>` 做小规模试跑，每个 query 仍采 16 条。
+跨用户奖励需要同一 parquet 的用户向量缓存，缺失时执行
+`make games-sidreasoner-user-embed`。
+
+探针默认只计算所选多样性奖励，沿用正式奖励的门控与塑形。
+指定 `--correctness` 时按配置合并正确性奖励。可用 `--reward-kwargs k=v`
+覆盖参数，用 `--shaping-step` 固定塑形步数（默认 0）。多个 N 用同一份缓存
+和相同的参考抽样种子比较。
+
+- **有效比较覆盖率**以全部 query 为分母，统计至少有一对 CoT 完整、通过门控、
+  有有效参考且正确性同分的 rollout 的 query。JSON 也给出至少一条 rollout
+  满足参考条件的 query 数。
+- **零方差占比与组内标准差均值**以每条 rollout 的最终 reward 计算，使用全部 query。
+- **真实物品排名一致率**在可比较的组内 rollout 对上计算。真实 SID 未命中视为
+  末尾之后，只取排名不同的对，reward 与排名同向记 1，反向记 0，reward 并列记 0.5。
+  先对 query 内的成对结果求均值，再跨 query 平均。无比较样本时为 `null`。
+- **n-gram 零重叠率**统计符合案例条件的 rollout 与所有有效参考 CoT 的逐对比较，
+  用距离等于 1 的比较数除以总比较数。分母为零时为 `null`。
+- **案例**以一条符合条件的候选 CoT 及其全部实际参考 CoT 为一组。若超过 100 组，
+  按 `--case-seed` 等概率抽样 100 组。JSON 保留双方各自的 TD 和最终 reward、
+  双方历史、参考的用户相似度与逐对 TD（该 reward 支持时）。
+
+`--reward custom --reward-entry <入口.py>` 支持原 verl 逐 batch API，
+逐条 API 使用 `--per-row`。返回浮点数或含 `score` 的字典。
+跨用户覆盖率与案例需要同时返回 `cot_ok`、`success`、`n_refs` 和
+`references`。每个参考的 `row_index` 指向同一 batch 的 rollout，此外可返回
+`user_similarity` 和逐对 `td`。若提供 `base_reward`，排名一致率只比较同分的对。
 
 ---
 

@@ -66,6 +66,7 @@ endif
 	games-sidreasoner-niche-data office-sidreasoner-niche-data industrial-sidreasoner-niche-data \
 	games-sidreasoner-rl-div office-sidreasoner-rl-div industrial-sidreasoner-rl-div \
 	games-sidreasoner-user-embed office-sidreasoner-user-embed industrial-sidreasoner-user-embed \
+	games-sidreasoner-rollout-cache office-sidreasoner-rollout-cache industrial-sidreasoner-rollout-cache \
 	games-sidreasoner-reward-probe office-sidreasoner-reward-probe industrial-sidreasoner-reward-probe \
 	games-sidreasoner-reward-curves office-sidreasoner-reward-curves industrial-sidreasoner-reward-curves \
 	sidreasoner-organize \
@@ -300,9 +301,11 @@ $(eval $(call SIDREASONER_CURVES_TARGET,games))
 $(eval $(call SIDREASONER_CURVES_TARGET,office))
 $(eval $(call SIDREASONER_CURVES_TARGET,industrial))
 
-# Stage 3 reward 组内区分度探针(vLLM 采样一个 batch, 逐组分解 reward;
-# ARGS 传参如 ARGS="--n-queries 32 --rollout-n 8 --reward bleu", MODEL= 覆盖策略)
+# Stage 2 测试 rollout 缓存与离线 reward 探针
 define SIDREASONER_REWARD_PROBE_TARGET
+$(1)-sidreasoner-rollout-cache:
+	DATASET=$(1) $(PY) -m src.eval.sidreasoner_rollout_cache $$$${ARGS:-}
+
 $(1)-sidreasoner-reward-probe:
 	DATASET=$(1) $(PY) -m src.eval.sidreasoner_reward_probe $$$${ARGS:-}
 endef

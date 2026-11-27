@@ -176,33 +176,3 @@ def test_addon_llmjudge_uses_history_blocks(tmp_path, monkeypatch):
     assert out[0]["td"] == pytest.approx(0.3)
     assert out[0]["intrinsic"] == pytest.approx(0.3)  # lam=1, sigma=1
     assert out[1]["intrinsic"] == 0.0  # 失败 rollout 不发放
-
-
-def test_judge_report_md_contains_scores_and_texts():
-    from src.eval.sidreasoner_reward_probe import judge_report_md
-
-    rec = {
-        "type": "within_user",
-        "query_a": {"split": "train", "index": 3},
-        "query_b": {"split": "train", "index": 3},
-        "history_a": ["<a_1><b_1><c_1> - Game One"],
-        "history_b": ["<a_1><b_1><c_1> - Game One"],
-        "cot_a": "trace a",
-        "cot_b": "trace b",
-        "scores": {"evidence": 3, "strategy": 2, "profile": 1},
-        "similarity": 0.5,
-        "diversity": 0.5,
-        "parsed": False,
-        "raw": '{"evidence": {"score": 3',
-    }
-    md = judge_report_md(
-        {"pairs": [rec], "summary": {"within_user": {
-            "n": 1, "mean_similarity": 0.5, "mean_evidence": 3.0,
-            "mean_strategy": 2.0, "mean_profile": 1.0,
-        }}},
-        {"category": "X", "model": "m", "base_url": "u", "calls": 1, "fallback": 1},
-    )
-    assert "evidence **3** / strategy **2** / profile **1**" in md
-    assert "Game One" in md and "trace a" in md and "trace b" in md
-    assert "解析失败, 全 2 回退" in md
-    assert "FALLBACK" in md

@@ -93,52 +93,55 @@ def _get_base_computer(kwargs: dict):
 def _get_addon(kwargs: dict):
     global _ADDON
     if _ADDON is None:
-        from src.reward.interdiv import InterQueryDiversityAddon
-
-        path = kwargs.get("user_embedding_path")
-        if not path:
-            raise ValueError(
-                "enable_inter_query_diversity=True 需要 user_embedding_path"
-                "(先运行 make <dataset>-sidreasoner-user-embed 生成离线缓存)。"
-            )
-        _ADDON = InterQueryDiversityAddon(
-            user_embedding_path=kwargs["user_embedding_path"],
-            top_k_neighbors=kwargs.get("top_k_neighbors", 8),
-            same_user_jaccard=kwargs.get("same_user_jaccard", 0.8),
-            bleu_div_len=kwargs.get("bleu_div_len", 1000),
-            lambda_init=kwargs.get("lambda_init", 0.2),
-            lambda_final=kwargs.get("lambda_final", 0.0),
-            decay_steps=kwargs.get("decay_steps", 300),
-            gamma=float(kwargs.get("gamma", 1.0)),
-            sigma=kwargs.get("sigma", 0.5),
-            model_path=kwargs.get("model_path"),
-            metrics_path=kwargs.get("metrics_path"),
-            require_trainer_step=_bool(kwargs.get("require_trainer_step"), False),
-            log_every=int(kwargs.get("log_every", 1)),
-            seed=kwargs.get("seed", 0),
-            success_mode=str(kwargs.get("success_mode", "full")),
-            reference_mode=str(kwargs.get("reference_mode", "full")),
-            bleu_smoothing=str(kwargs.get("bleu_smoothing", "none")),
-            td_norm=str(kwargs.get("td_norm", "none")),
-            similarity=str(kwargs.get("similarity", "bleu")),
-            ngram_n=int(kwargs.get("ngram_n", 1)),
-            combine=str(kwargs.get("combine", "add")),
-            judge_base_url=str(kwargs.get("judge_base_url", "http://localhost:8000/v1")),
-            judge_model=str(kwargs.get("judge_model", "Qwen3-1.7B")),
-            judge_concurrency=int(kwargs.get("judge_concurrency", 32)),
-            niche_dict_path=kwargs.get("niche_dict_path"),
-            niche_lexstats_path=kwargs.get("niche_lexstats_path"),
-            niche_sif_path=kwargs.get("niche_sif_path"),
-            niche_summary_method=str(kwargs.get("niche_summary_method", "sif")),
-            niche_embed_model=kwargs.get("niche_embed_model"),
-            niche_embed_device=str(kwargs.get("niche_embed_device", "cpu")),
-            niche_embed_batch_size=int(kwargs.get("niche_embed_batch_size", 64)),
-            niche_embed_num_threads=int(
-                kwargs.get("niche_embed_num_threads", 8) or 0
-            ),
-            niche_only_success=_bool(kwargs.get("niche_only_success"), True),
-        )
+        _ADDON = build_diversity_addon(kwargs)
     return _ADDON
+
+
+def build_diversity_addon(kwargs: dict):
+    from src.reward.interdiv import InterQueryDiversityAddon
+
+    if not kwargs.get("user_embedding_path"):
+        raise ValueError(
+            "enable_inter_query_diversity=True 需要 user_embedding_path"
+            "(先运行 make <dataset>-sidreasoner-user-embed 生成离线缓存)。"
+        )
+    return InterQueryDiversityAddon(
+        user_embedding_path=kwargs["user_embedding_path"],
+        top_k_neighbors=kwargs.get("top_k_neighbors", 8),
+        same_user_jaccard=kwargs.get("same_user_jaccard", 0.8),
+        bleu_div_len=kwargs.get("bleu_div_len", 1000),
+        lambda_init=kwargs.get("lambda_init", 0.2),
+        lambda_final=kwargs.get("lambda_final", 0.0),
+        decay_steps=kwargs.get("decay_steps", 300),
+        gamma=float(kwargs.get("gamma", 1.0)),
+        sigma=kwargs.get("sigma", 0.5),
+        model_path=kwargs.get("model_path"),
+        metrics_path=kwargs.get("metrics_path"),
+        require_trainer_step=_bool(kwargs.get("require_trainer_step"), False),
+        log_every=int(kwargs.get("log_every", 1)),
+        seed=kwargs.get("seed", 0),
+        success_mode=str(kwargs.get("success_mode", "full")),
+        reference_mode=str(kwargs.get("reference_mode", "full")),
+        bleu_smoothing=str(kwargs.get("bleu_smoothing", "none")),
+        td_norm=str(kwargs.get("td_norm", "none")),
+        similarity=str(kwargs.get("similarity", "bleu")),
+        ngram_n=int(kwargs.get("ngram_n", 1)),
+        combine=str(kwargs.get("combine", "add")),
+        judge_base_url=str(kwargs.get("judge_base_url", "http://localhost:8000/v1")),
+        judge_model=str(kwargs.get("judge_model", "Qwen3-1.7B")),
+        judge_concurrency=int(kwargs.get("judge_concurrency", 32)),
+        niche_dict_path=kwargs.get("niche_dict_path"),
+        niche_lexstats_path=kwargs.get("niche_lexstats_path"),
+        niche_sif_path=kwargs.get("niche_sif_path"),
+        niche_summary_method=str(kwargs.get("niche_summary_method", "sif")),
+        niche_embed_model=kwargs.get("niche_embed_model"),
+        niche_embed_device=str(kwargs.get("niche_embed_device", "cpu")),
+        niche_embed_batch_size=int(kwargs.get("niche_embed_batch_size", 64)),
+        niche_embed_num_threads=int(
+            kwargs.get("niche_embed_num_threads", 8) or 0
+        ),
+        niche_only_success=_bool(kwargs.get("niche_only_success"), True),
+    )
 
 
 def rule_base_reward(
