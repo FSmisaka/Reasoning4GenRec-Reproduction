@@ -2,6 +2,7 @@
 
 import argparse
 from collections import defaultdict
+from dataclasses import dataclass, field
 import importlib.util
 from itertools import combinations
 import json
@@ -78,27 +79,26 @@ def load_custom_reward(path, name, per_row, kwargs):
 
 def configure_reward(cfg, category, meta, args):
     overrides = parse_overrides(args.reward_kwargs)
-    if args.reward == "custom":
-        score = load_custom_reward(args.reward_entry, args.reward_name, args.per_row, overrides)
-        return score, overrides
-    if args.reward in CORRECTNESS and args.correctness != "none":
-        raise ValueError("正确性 reward preset 本身已指定正确性计算方式。")
+    if overrides.get("combine", "add") != "add":
+        raise ValueError("离线探针的正确性与多样性 reward 使用加法合并（combine=add）。")
 
     rl = cfg["rl"]
-    base = args.reward if args.reward in CORRECTNESS else args.correctness
-    computer = None
-    settings = {}
-    if base != "none":
-        base_kwargs = {
-            **rl.get("reward_kwargs", {}), **overrides,
-            "correctness_reward_type": CORRECTNESS[base],
-            "num_sid_levels": meta["sid_length"],
-        }
-        computer, _ = _build_base_computer(base_kwargs)
-        settings["correctness"] = base_kwargs
+    base_kwargs = {
+        **rl.get("reward_kwargs", {}), **overrides,
+        "correctness_reward_type": CORRECTNESS[args.correctness],
+        "num_sid_levels": meta["sid_length"],
+    }
+    computer, _ = _build_base_computer(base_kwargs)
+    settings = {"correctness": base_kwargs}
 
     addon = None
-    if args.reward in DIVERSITY:
+    custom_score = None
+    if args.diversity == "custom":
+        custom_score = load_custom_reward(
+            args.reward_entry, args.reward_name, args.per_row, overrides
+        )
+        settings["diversity"] = overrides
+    else:
         kwargs = dict(rl["inter_query_diversity"])
         kwargs["user_embedding_path"] = (
             kwargs.get("user_embedding_path")
@@ -106,11 +106,10 @@ def configure_reward(cfg, category, meta, args):
         )
         kwargs["model_path"] = meta["model"]
         kwargs.update(overrides)
-        kwargs["similarity"] = DIVERSITY[args.reward]
-        if args.reward == "ngram":
+        kwargs["similarity"] = DIVERSITY[args.diversity]
+        kwargs["combine"] = "add"
+        if args.diversity == "ngram":
             kwargs["ngram_n"] = args.ngram_n or int(kwargs.get("ngram_n", 1))
-        if computer is None:
-            kwargs["combine"] = "add"
         addon = build_diversity_addon(kwargs)
         settings["diversity"] = kwargs
 
@@ -121,9 +120,15 @@ def configure_reward(cfg, category, meta, args):
                 ground_truth=row["ground_truth"], extra_info=row["extra_info"],
             )
             for row in rows
-        ] if computer is not None else [0.0] * len(rows)
-        if addon is None:
-            return [{"score": reward} for reward in base_rewards]
+        ]
+        if custom_score is not None:
+            combined = []
+            for result, base in zip(custom_score(rows), base_rewards, strict=True):
+                intrinsic = float(result["score"])
+                combined.append({
+                    **result, "base_reward": base, "intrinsic": intrinsic, "score": base + intrinsic,
+                })
+            return combined
         return addon.compute_batch(rows, base_rewards, trainer_step=args.shaping_step, probe=True)
 
     return score, settings
@@ -195,9 +200,58 @@ def describe_case(i, rows, results, ranks):
     return case
 
 
+@dataclass
+class RewardStats:
+    means: list[float] = field(default_factory=list)
+    stds: list[float] = field(default_factory=list)
+    covered_queries: int = 0
+    concordance: list[float] = field(default_factory=list)
+    informative_pairs: int = 0
+
+    def add_group(self, scores, group, candidates, control, ranks, *, has_coverage=True):
+        values = [scores[i] for i in group]
+        self.means.append(fmean(values))
+        self.stds.append(pstdev(values))
+
+        covered = False
+        comparisons = []
+        for i, j in combinations(candidates, 2):
+            if control is not None and control[i] != control[j]:
+                continue
+            covered = True
+            if ranks[i] != ranks[j]:
+                comparisons.append(
+                    0.5 if scores[i] == scores[j]
+                    else float((scores[i] > scores[j]) == (ranks[i] < ranks[j]))
+                )
+        self.covered_queries += has_coverage and covered
+        self.informative_pairs += len(comparisons)
+        if comparisons:
+            self.concordance.append(fmean(comparisons))
+
+    def summary(self, coverage_available=True):
+        n_queries = len(self.means)
+        return {
+            "within_group_mean": fmean(self.means),
+            "within_group_std": fmean(self.stds),
+            "zero_variance_rate": self.stds.count(0.0) / n_queries,
+            "effective_comparison_coverage": {
+                "rate": self.covered_queries / n_queries if coverage_available else None,
+                "covered_queries": self.covered_queries,
+            },
+            "target_rank_concordance": {
+                "rate": fmean(self.concordance) if self.concordance else None,
+                "informative_queries": len(self.concordance),
+                "informative_pairs": self.informative_pairs,
+            },
+        }
+
+
 def analyze(batches, meta, score, reward, case_seed):
     counts = defaultdict(int)
-    deviations, concordance, cases = [], [], []
+    fields = {"diversity": "intrinsic", "correctness": "base_reward", "total": "score"}
+    stats = {component: RewardStats() for component in fields}
+    eligible_means, eligible_stds, cases = [], [], []
     rng = random.Random(case_seed)
 
     for batch in batches:
@@ -206,37 +260,33 @@ def analyze(batches, meta, score, reward, case_seed):
         if len(results) != len(rows):
             raise ValueError("reward 返回的分数数量与 rollout 数量不一致。")
         # The training reward manager stores scores as float32 before GRPO.
-        scores = np.asarray([result["score"] for result in results], dtype=np.float32)
-        if not np.isfinite(scores).all():
-            raise ValueError("reward score 必须是有限数值。")
+        reward_values = {}
+        for component, key in fields.items():
+            values = np.asarray([result[key] for result in results], dtype=np.float32)
+            if not np.isfinite(values).all():
+                raise ValueError(f"{component} reward 必须是有限数值。")
+            reward_values[component] = values.tolist()
         ranks = [target_rank(row, meta["sid_length"]) for row in rows]
 
         for group in groups:
-            values = [float(scores[i]) for i in group]
             counts["queries"] += 1
-            counts["zero_variance"] += min(values) == max(values)
-            deviations.append(pstdev(values))
-
             has_reference_diagnostics = any("n_refs" in results[i] for i in group)
             counts["queries_with_diagnostics"] += has_reference_diagnostics
             valid = [i for i in group if eligible(results[i])]
             counts["queries_with_eligible_reference"] += bool(valid)
-            pairs = [
-                (i, j) for i, j in combinations(valid if has_reference_diagnostics else group, 2)
-                if results[i].get("base_reward") == results[j].get("base_reward")
-            ]
-            counts["covered_queries"] += has_reference_diagnostics and bool(pairs)
-            comparisons = []
-            for i, j in pairs:
-                if ranks[i] == ranks[j]:
-                    continue
-                if scores[i] == scores[j]:
-                    comparisons.append(0.5)
-                else:
-                    comparisons.append(float((scores[i] > scores[j]) == (ranks[i] < ranks[j])))
-            counts["ranking_pairs"] += len(comparisons)
-            if comparisons:
-                concordance.append(fmean(comparisons))
+            diversity = reward_values["diversity"]
+            correctness = reward_values["correctness"]
+            stats["diversity"].add_group(
+                diversity, group, valid if has_reference_diagnostics else group,
+                correctness, ranks, has_coverage=has_reference_diagnostics,
+            )
+            stats["correctness"].add_group(correctness, group, group, diversity, ranks)
+            stats["total"].add_group(reward_values["total"], group, group, None, ranks)
+
+            if reward == "ngram" and valid:
+                eligible_scores = [diversity[i] for i in valid]
+                eligible_means.append(fmean(eligible_scores))
+                eligible_stds.append(pstdev(eligible_scores))
 
             for i in valid:
                 details = results[i].get("references", [])
@@ -254,27 +304,20 @@ def analyze(batches, meta, score, reward, case_seed):
                     if slot < CASE_LIMIT:
                         cases[slot] = describe_case(i, rows, results, ranks)
 
-    if counts["queries"] != meta["n_queries"] or not deviations:
+    if counts["queries"] != meta["n_queries"] or not counts["queries"]:
         raise ValueError("缓存里的 query 数与元数据不符，或缓存为空。")
 
     summary = {
         "n_queries": counts["queries"],
         "n_rollouts": counts["queries"] * meta["rollout_n"],
-        "effective_comparison_coverage": {
-            "rate": counts["covered_queries"] / counts["queries"]
-            if counts["queries_with_diagnostics"] else None,
-            "covered_queries": counts["covered_queries"],
-            "queries_with_eligible_reference": counts["queries_with_eligible_reference"],
-            "queries_with_diagnostics": counts["queries_with_diagnostics"],
-        },
-        "grpo_zero_variance_rate": counts["zero_variance"] / counts["queries"],
-        "grpo_mean_within_group_reward_std": fmean(deviations),
-        "target_rank_concordance": {
-            "rate": fmean(concordance) if concordance else None,
-            "informative_queries": len(concordance),
-            "informative_pairs": counts["ranking_pairs"],
-        },
+        "diversity": stats["diversity"].summary(bool(counts["queries_with_diagnostics"])),
+        "correctness": stats["correctness"].summary(),
+        "total": stats["total"].summary(),
     }
+    summary["diversity"]["effective_comparison_coverage"].update({
+        "queries_with_eligible_reference": counts["queries_with_eligible_reference"],
+        "queries_with_diagnostics": counts["queries_with_diagnostics"],
+    })
     specific = {}
     if reward == "ngram":
         total = counts["ngram_pairs"]
@@ -283,6 +326,11 @@ def analyze(batches, meta, score, reward, case_seed):
             "zero_overlap_pairs": counts["zero_overlap_pairs"],
             "compared_pairs": total,
         }
+        specific.update({
+            "eligible_within_group_mean": fmean(eligible_means) if eligible_means else None,
+            "eligible_within_group_std": fmean(eligible_stds) if eligible_stds else None,
+            "eligible_queries": len(eligible_means),
+        })
     return {
         "summary": summary, "reward_specific": specific,
         "eligible_case_count": counts["eligible_cases"], "cases": cases,
@@ -293,9 +341,11 @@ def main(argv=None, cfg=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache", type=Path)
     parser.add_argument(
-        "--reward", choices=[*DIVERSITY, *CORRECTNESS, "custom"], default="ngram"
+        "--diversity", choices=[*DIVERSITY, "custom"], required=True, help="多样性奖励。",
     )
-    parser.add_argument("--correctness", choices=["none", *CORRECTNESS], default="none")
+    parser.add_argument(
+        "--correctness", choices=CORRECTNESS, required=True, help="正确性奖励。",
+    )
     parser.add_argument("--ngram-n", type=int)
     parser.add_argument("--shaping-step", type=int, default=0)
     parser.add_argument("--reward-entry", type=Path)
@@ -305,9 +355,9 @@ def main(argv=None, cfg=None):
     parser.add_argument("--case-seed", type=int, default=0)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
-    if args.reward == "custom" and (not args.reward_entry or args.correctness != "none"):
-        parser.error("custom 需要 --reward-entry，正确性由该 reward 自己决定。")
-    if args.ngram_n is not None and (args.reward != "ngram" or args.ngram_n < 1):
+    if args.diversity == "custom" and not args.reward_entry:
+        parser.error("--diversity custom 需要 --reward-entry。")
+    if args.ngram_n is not None and (args.diversity != "ngram" or args.ngram_n < 1):
         parser.error("--ngram-n 仅用于 ngram，且必须是正整数。")
     if args.shaping_step < 0:
         parser.error("--shaping-step 必须非负。")
@@ -316,6 +366,7 @@ def main(argv=None, cfg=None):
     category = resolve_category(cfg["data"])
     suffix = sid_suffix(cfg["data"])
     cache = args.cache or default_cache_path(cfg, category)
+    reward = args.diversity
     with cache.open(encoding="utf-8") as handle:
         meta = json.loads(handle.readline())["meta"]
         if (
@@ -325,26 +376,26 @@ def main(argv=None, cfg=None):
         ):
             raise ValueError("缓存的版本、数据集或 SID 设置与当前探针不匹配。")
         score, settings = configure_reward(cfg, category, meta, args)
-        report = analyze((json.loads(line) for line in handle), meta, score, args.reward, args.case_seed)
+        report = analyze((json.loads(line) for line in handle), meta, score, reward, args.case_seed)
 
-    label = args.reward
-    if args.reward == "ngram":
+    label = reward
+    if args.diversity == "ngram":
         label += f"_n{settings['diversity']['ngram_n']}"
-    if args.correctness != "none":
-        label = f"{args.correctness}_{label}"
+    label = f"{args.correctness}_{label}"
     out = args.out or Path("results/reward_probe") / f"{category}{suffix}_stage2_test_{label}.json"
     if cache.resolve() == out.resolve():
         parser.error("--out 需要使用与 rollout 缓存不同的路径。")
     with atomic_output(out) as handle:
         json.dump({
             "meta": {
-                "cache": str(cache), "generation": meta, "reward": args.reward,
+                "cache": str(cache), "generation": meta, "reward": reward,
+                "diversity": args.diversity,
                 "correctness": args.correctness, "settings": settings,
                 "shaping_step": args.shaping_step, "case_seed": args.case_seed,
                 **({"custom": {
                     "entry": str(args.reward_entry), "name": args.reward_name,
                     "per_row": args.per_row,
-                }} if args.reward == "custom" else {}),
+                }} if args.diversity == "custom" else {}),
             },
             **report,
         }, handle, ensure_ascii=False, indent=2, allow_nan=False)

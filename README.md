@@ -192,8 +192,10 @@ make games-sidreasoner-rl-beam-div     # 再乘 OneReason R_div(候选首层 cod
 make games-sidreasoner-user-embed      # (bleu 前置)SASRec 用户向量离线缓存 -> runs/sidreasoner/user_embed/
 make games-sidreasoner-rl-bleu         # 跨 Query CoT 多样性: R + lambda*I*clip(gamma^T*TD, 0, sigma)
 make games-sidreasoner-rl-beam-llmjudge  # 同上, TD = 1 - LLM-Judge 语义相似度(见下)
+
+# 探针
 make games-sidreasoner-rollout-cache   # Stage 2 测试集每个 query 保存 16 条 rollout 和 beam
-make games-sidreasoner-reward-probe ARGS="--reward ngram --correctness rollout-beam --ngram-n 2"
+make games-sidreasoner-reward-probe ARGS="--diversity ngram --correctness rollout-beam --ngram-n 2"
 
 # 评估(目录名对应 think_rolloutbeam / think_rolloutbeam_div / think_bleu)
 make games-sidreasoner-think MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam/global_step_100/actor_merged
@@ -227,7 +229,7 @@ make games-sidreasoner-user-embed
 
 # 3) 生成测试 rollout 缓存，再用 JSON 报告检查候选 CoT 和参考 CoT
 make games-sidreasoner-rollout-cache
-make games-sidreasoner-reward-probe ARGS="--reward llmjudge"
+make games-sidreasoner-reward-probe ARGS="--diversity llmjudge --correctness rollout-beam"
 
 # 4) Stage 3 RL(Rollout-Beam x LLM-Judge 多样性)
 make games-sidreasoner-rl-beam-llmjudge

@@ -357,9 +357,8 @@ make games-sidreasoner-rl
 
 ```bash
 make games-sidreasoner-rollout-cache
-make games-sidreasoner-reward-probe ARGS="--reward ngram --correctness rollout-beam --ngram-n 2"
-make games-sidreasoner-reward-probe ARGS="--reward ngram --correctness rollout-beam --ngram-n 3"
-make games-sidreasoner-reward-probe ARGS="--reward ngram --ngram-n 3"
+make games-sidreasoner-reward-probe ARGS="--diversity ngram --correctness rollout-beam --ngram-n 2"
+make games-sidreasoner-reward-probe ARGS="--diversity ngram --correctness rollout-beam --ngram-n 3"
 ```
 
 默认缓存路径为 `data/sidreasoner_rollouts/<Category>_stage2_test.jsonl`，
@@ -369,29 +368,43 @@ make games-sidreasoner-reward-probe ARGS="--reward ngram --ngram-n 3"
 跨用户奖励需要同一 parquet 的用户向量缓存，缺失时执行
 `make games-sidreasoner-user-embed`。
 
-探针默认只计算所选多样性奖励，沿用正式奖励的门控与塑形。
-指定 `--correctness` 时按配置合并正确性奖励。可用 `--reward-kwargs k=v`
-覆盖参数，用 `--shaping-step` 固定塑形步数（默认 0）。多个 N 用同一份缓存
-和相同的参考抽样种子比较。
+探针要求同时指定 `--diversity`（`ngram`、`bleu`、`llmjudge`、`niche`、`custom`）
+和 `--correctness`（`steprule`、`rollout-beam`、`rollout-beam-div`）。
+最终奖励为正确性奖励加上经过门控、塑形和加权的多样性奖励。
+可用 `--reward-kwargs k=v` 覆盖奖励参数，
+用 `--shaping-step` 固定塑形步数（默认 0）。多个 N 用同一份缓存和相同的
+参考抽样种子比较。
 
-- **有效比较覆盖率**以全部 query 为分母，统计至少有一对 CoT 完整、通过门控、
-  有有效参考且正确性同分的 rollout 的 query。JSON 也给出至少一条 rollout
-  满足参考条件的 query 数。
-- **零方差占比与组内标准差均值**以每条 rollout 的最终 reward 计算，使用全部 query。
-- **真实物品排名一致率**在可比较的组内 rollout 对上计算。真实 SID 未命中视为
+JSON 在 `summary.diversity`、`summary.correctness`、`summary.total` 下报告各自的指标。
+
+- **组内均值和标准差**（`within_group_mean`、`within_group_std`）分别先在每个组的
+  全部 rollout 上计算均值和总体标准差，再对所有 GRPO 组等权平均。
+  `zero_variance_rate` 是对应分数组内标准差为零的组占比。
+- **有效比较覆盖率**以全部 query 为分母，统计至少有一对可比较 rollout 的 query。
+  多样性比较要求两条 CoT 完整、通过门控、有有效参考，且正确性分数相同。
+  正确性比较要求多样性分数相同，总奖励比较使用全部组内对。
+  多样性部分额外记录有至少一条合格 rollout 的 query 数和有参考诊断的 query 数。
+- **真实物品排名一致率**沿用相应分数的配对条件。自定义多样性奖励未提供参考诊断时，
+  多样性覆盖率为 `null`，排名一致率考虑所有正确性分数相同的组内对。真实 SID 未命中视为
   末尾之后，只取排名不同的对，reward 与排名同向记 1，反向记 0，reward 并列记 0.5。
   先对 query 内的成对结果求均值，再跨 query 平均。无比较样本时为 `null`。
 - **n-gram 零重叠率**统计符合案例条件的 rollout 与所有有效参考 CoT 的逐对比较，
   用距离等于 1 的比较数除以总比较数。分母为零时为 `null`。
+- **n-gram 合格 rollout 统计**（`eligible_within_group_mean`、`eligible_within_group_std`）
+  只用 `success=true`、`cot_ok=true` 且 `n_refs >= 1` 的多样性分数。
+  先逐组计算均值和总体标准差，再对有合格 rollout 的组取平均。
+  只有一条合格 rollout 的组的标准差为零。
+  `eligible_queries` 是参与聚合的组数。没有合格组时两个指标均为 `null`。
 - **案例**以一条符合条件的候选 CoT 及其全部实际参考 CoT 为一组。若超过 100 组，
   按 `--case-seed` 等概率抽样 100 组。JSON 保留双方各自的 TD 和最终 reward、
   双方历史、参考的用户相似度与逐对 TD（该 reward 支持时）。
 
-`--reward custom --reward-entry <入口.py>` 支持原 verl 逐 batch API，
-逐条 API 使用 `--per-row`。返回浮点数或含 `score` 的字典。
+`--diversity custom --reward-entry <入口.py>` 支持原 verl 逐 batch API，
+逐条 API 使用 `--per-row`。返回浮点数或含 `score` 的字典，分数为已加权的
+多样性奖励，探针会将它与所选的正确性奖励相加。
 跨用户覆盖率与案例需要同时返回 `cot_ok`、`success`、`n_refs` 和
 `references`。每个参考的 `row_index` 指向同一 batch 的 rollout，此外可返回
-`user_similarity` 和逐对 `td`。若提供 `base_reward`，排名一致率只比较同分的对。
+`user_similarity` 和逐对 `td`。
 
 ---
 
@@ -447,7 +460,7 @@ make games-sidreasoner-rl-beam-niche    # 产物 ..._Qwen3-1.7B_rolloutbeam_nich
 #    切换 c3 度量: config rl.inter_query_diversity.niche_summary_method = tfidf|sif
 
 # 2) reward 探针(验证组内区分度; 需先完成预处理)
-make games-sidreasoner-reward-probe ARGS="--reward niche"
+make games-sidreasoner-reward-probe ARGS="--diversity niche --correctness rollout-beam"
 ```
 
 配置(`config/sidreasoner.py` 的 `rl.inter_query_diversity`, **全部参数走
