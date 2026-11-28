@@ -223,10 +223,9 @@ CONFIG: Dict[str, Any] = {
             # bleu_smoothing: none(DIVER 官方无平滑, 自然语言 CoT 上 BLEU
             #   常为 0 -> TD 饱和到 1)| method1(nltk add-1 平滑, 有真实区分度)
             "bleu_smoothing": "method1",
-            # td_norm: none | rank。TD 的组内绝对差通常只有 ~0.01, 直接相加
-            #   对 GRPO 组内排序几乎无影响; rank 把每组的 TD 按秩映射到
-            #   [0,1] 均布(仅 I=1 的 rollout 参与), 组内区分度由 λ·σ 直接
-            #   控制。rank 模式下建议 sigma=1.0(否则一半排序被裁剪)。
+            # td_norm（也可写 norm）: none | group_rank | batch_rank |
+            #   group_minmax | batch_minmax。对 success 且 cot_ok 的 rollout
+            #   按 GRPO 组或整个 batch 归一化 TD。旧值 rank 等同 group_rank。
             "td_norm": "none",
             # similarity: 多样性度量。bleu = SymBLEU(DIVER 官方口径, 受
             #   bleu_smoothing 影响); ngram_jaccard = 1 - |G_n(a)∩G_n(b)| /

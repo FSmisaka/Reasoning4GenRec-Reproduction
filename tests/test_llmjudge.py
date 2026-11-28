@@ -110,7 +110,8 @@ def _resp(cot, answer):
     return f"<think>\n{cot}\n</think>\n\n{answer}"
 
 
-def test_addon_llmjudge_uses_history_blocks(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("mode", "expected"), [("none", [0.3, 0.6]), ("batch_minmax", [0.0, 1.0])])
+def test_addon_llmjudge_uses_history_blocks(tmp_path, monkeypatch, mode, expected):
     n_q, g = 2, 2
     emb = np.eye(n_q, 8, dtype=np.float32)
     path = tmp_path / "user_emb.npz"
@@ -134,7 +135,7 @@ def test_addon_llmjudge_uses_history_blocks(tmp_path, monkeypatch):
 
         def similarities(self, pairs):
             captured["pairs"] = pairs
-            return [0.7] * len(pairs)  # sim 0.7 -> td 0.3
+            return [0.7 if "reasoning about user 0" in a else 0.4 for a, _ in pairs]
 
     class FakeHistory:
         def __init__(self, *a, **kw):
@@ -152,6 +153,7 @@ def test_addon_llmjudge_uses_history_blocks(tmp_path, monkeypatch):
         top_k_neighbors=1,
         lambda_init=1.0,
         sigma=1.0,
+        td_norm=mode,
         metrics_path=str(tmp_path / "metrics.jsonl"),
     )
     rows = []
@@ -174,5 +176,5 @@ def test_addon_llmjudge_uses_history_blocks(tmp_path, monkeypatch):
     assert all("- item " in b for _, b in pairs)
     assert out[0]["n_refs"] == 1
     assert out[0]["td"] == pytest.approx(0.3)
-    assert out[0]["intrinsic"] == pytest.approx(0.3)  # lam=1, sigma=1
+    assert [out[i]["intrinsic"] for i in (0, 2)] == pytest.approx(expected)
     assert out[1]["intrinsic"] == 0.0  # 失败 rollout 不发放

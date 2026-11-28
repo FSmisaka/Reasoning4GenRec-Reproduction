@@ -18,7 +18,8 @@ from src.data.sid_switch import sid_suffix
 from src.data.sidreasoner_user_embed import default_embedding_path
 from src.eval.sidreasoner_rollout_cache import CACHE_VERSION, atomic_output, default_cache_path
 from src.reward.direct_recommendation_interdiv import _build_base_computer, build_diversity_addon
-from src.reward.interdiv.cot_utils import extract_cot
+from src.reward.interdiv.cot_utils import extract_cot, is_recommendation_success, is_usable_cot
+from src.reward.interdiv.shaping import normalize_td, resolve_td_norm
 from src.reward.sid_rewards.base import extract_sid_tokens
 from src.train.common import resolve_category
 
@@ -77,12 +78,39 @@ def load_custom_reward(path, name, per_row, kwargs):
     return score
 
 
+def normalize_custom_diversity(rows, results, mode, success_mode, sid_length):
+    groups = defaultdict(list)
+    prepared = []
+    for i, (row, result) in enumerate(zip(rows, results, strict=True)):
+        extra = row["extra_info"]
+        groups[(extra["split"], extra["index"])].append(i)
+        result = dict(result)
+        if "cot_ok" not in result:
+            result["cot_ok"] = is_usable_cot(extract_cot(row["solution_str"]))
+        if "success" not in result:
+            result["success"] = is_recommendation_success(
+                row["solution_str"], row["ground_truth"], num_sid=sid_length, mode=success_mode,
+            )
+        prepared.append(result)
+
+    values = normalize_td(
+        [result["score"] for result in prepared], groups.values(),
+        [result["success"] and result["cot_ok"] for result in prepared], mode,
+    )
+    for result, value in zip(prepared, values, strict=True):
+        result["score"] = float(value)
+    return prepared
+
+
 def configure_reward(cfg, category, meta, args):
     overrides = parse_overrides(args.reward_kwargs)
     if overrides.get("combine", "add") != "add":
         raise ValueError("离线探针的正确性与多样性 reward 使用加法合并（combine=add）。")
 
     rl = cfg["rl"]
+    diversity_cfg = rl.get("inter_query_diversity", {})
+    norm_source = overrides if {"norm", "td_norm"} & overrides.keys() else diversity_cfg
+    norm = resolve_td_norm(norm_source.get("norm", norm_source.get("td_norm", "none")))
     base_kwargs = {
         **rl.get("reward_kwargs", {}), **overrides,
         "correctness_reward_type": CORRECTNESS[args.correctness],
@@ -94,18 +122,22 @@ def configure_reward(cfg, category, meta, args):
     addon = None
     custom_score = None
     if args.diversity == "custom":
+        custom_kwargs = {k: value for k, value in overrides.items() if k not in {"norm", "td_norm"}}
         custom_score = load_custom_reward(
-            args.reward_entry, args.reward_name, args.per_row, overrides
+            args.reward_entry, args.reward_name, args.per_row, custom_kwargs
         )
-        settings["diversity"] = overrides
+        success_mode = overrides.get("success_mode", diversity_cfg.get("success_mode", "full"))
+        settings["diversity"] = {**custom_kwargs, "td_norm": norm, "success_mode": success_mode}
     else:
-        kwargs = dict(rl["inter_query_diversity"])
+        kwargs = dict(diversity_cfg)
         kwargs["user_embedding_path"] = (
             kwargs.get("user_embedding_path")
             or default_embedding_path(category, kwargs.get("user_encoder_type", "sasrec"))
         )
         kwargs["model_path"] = meta["model"]
         kwargs.update(overrides)
+        kwargs.pop("norm", None)
+        kwargs["td_norm"] = norm
         kwargs["similarity"] = DIVERSITY[args.diversity]
         kwargs["combine"] = "add"
         if args.diversity == "ngram":
@@ -122,8 +154,13 @@ def configure_reward(cfg, category, meta, args):
             for row in rows
         ]
         if custom_score is not None:
+            results = custom_score(rows)
+            if norm != "none":
+                results = normalize_custom_diversity(
+                    rows, results, norm, success_mode, meta["sid_length"],
+                )
             combined = []
-            for result, base in zip(custom_score(rows), base_rewards, strict=True):
+            for result, base in zip(results, base_rewards, strict=True):
                 intrinsic = float(result["score"])
                 combined.append({
                     **result, "base_reward": base, "intrinsic": intrinsic, "score": base + intrinsic,

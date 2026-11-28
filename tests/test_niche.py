@@ -441,8 +441,9 @@ def _niche_batch(queries, rollout_n=2):
     return rows
 
 
-def test_addon_niche_td_and_diag(niche_addon):
-    ad, n_q, g = niche_addon()
+@pytest.mark.parametrize(("mode", "expected"), [("none", 1.0), ("group_minmax", 0.0), ("batch_minmax", 1.0)])
+def test_addon_niche_td_and_diag(niche_addon, mode, expected):
+    ad, n_q, g = niche_addon(td_norm=mode)
     own = f"{NICHE_SENT} {POP_SENT} adventure racing appeal."
     nbr = f"{NICHE_SENT} {POP_SENT} puzzle folklore appeal."
     rows = _niche_batch([("train", 0, own), ("train", 1, nbr), ("train", 2, own)])
@@ -460,8 +461,8 @@ def test_addon_niche_td_and_diag(niche_addon):
     assert q0["niche_c2"] == pytest.approx(1.0)
     assert q0["niche_c3"] == pytest.approx(1.0)
     assert q0["td"] == pytest.approx(1.0)
-    assert q0["intrinsic"] == pytest.approx(1.0)  # lambda=1, sigma=1, I=1
-    assert q0["score"] == pytest.approx(1.5)
+    assert q0["intrinsic"] == pytest.approx(expected)
+    assert q0["score"] == pytest.approx(0.5 + expected)
     # q1: 历史 [0,1] 无 niche -> c1 未定义; ref 来自 q0(同向)
     q1_rows = out[g : 2 * g]
     assert all(r["niche_c1_defined"] == 0 for r in q1_rows)

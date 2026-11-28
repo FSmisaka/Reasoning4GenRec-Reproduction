@@ -67,9 +67,16 @@ intrinsic 零方差)。四个独立开关(默认均保持原行为):
 | `success_mode` | `full`(默认)/`prefix`/`none` | I 的口径: 三级全匹配 / 首层 code 匹配 / 不做正确性约束(仅要求答案可解析) |
 | `reference_mode` | `full`(默认)/`prefix`/`none` | 邻居 Reference 准入: 三级全匹配 / 首层 code 匹配 / 退回任一可解析 CoT(优先级 full > prefix > any; 旧值 `success`/`any` 兼容) |
 | `bleu_smoothing` | `none`(默认)/`method1` | DIVER 无平滑(自然语言 CoT 上 BLEU 常为 0, TD 饱和到 1)/ nltk add-1 平滑 |
-| `td_norm` | `none`(默认)/`rank` | 无 / 组内秩归一化: TD 按秩映射到 [0,1] 均布(仅 I=1 的 rollout 参与), 保证 GRPO 组内区分度由 λ·σ 直接控制; rank 模式建议 `sigma=1.0` |
+| `td_norm`（也可写 `norm`） | `none`（默认）/ `group_rank` / `batch_rank` / `group_minmax` / `batch_minmax` | `group_` 按 GRPO 组归一化，`batch_` 按整个 reward batch 归一化。旧值 `rank` 等同于 `group_rank` |
 | `similarity` | `bleu`(默认)/`ngram_jaccard` | 多样性度量: SymBLEU / `1 - \|G_n(a)∩G_n(b)\| / \|G_n(a)∪G_n(b)\|`(n-gram 集合 Jaccard) |
 | `ngram_n` | 1 | ngram_jaccard 的 n 阶数 |
+
+n-gram、BLEU、LLM-Judge 和 Niche 共用这些模式。只选 `success=true` 且
+`cot_ok=true` 的 rollout。秩归一化把原始 TD 按秩映射到 [0, 1]，并列取
+平均秩。min-max 从选中 rollout 的最小值和最大值计算
+`(TD - min) / (max - min)`，所有选中分数相等时取 0。只有一条时两种方式都取 0。
+没有有效参考时，原始 TD 记为 0，仍按这两项条件判断是否参与。
+归一化后的 `td_used` 再进入折扣、裁剪和加权。
 
 在 32 query x 8 rollout 的真实 probe batch 上实测(Video_Games, Stage 2):
 
@@ -375,6 +382,10 @@ make games-sidreasoner-reward-probe ARGS="--diversity ngram --correctness rollou
 用 `--shaping-step` 固定塑形步数（默认 0）。多个 N 用同一份缓存和相同的
 参考抽样种子比较。
 
+例如，`--reward-kwargs norm=batch_minmax` 按缓存中的每个 batch 做 min-max 归一化，
+`--reward-kwargs norm=group_minmax` 则按 query 归一化。比较不同模式时，可用
+`--out` 分别保存报告。
+
 JSON 在 `summary.diversity`、`summary.correctness`、`summary.total` 下报告各自的指标。
 
 - **组内均值和标准差**（`within_group_mean`、`within_group_std`）分别先在每个组的
@@ -402,8 +413,10 @@ JSON 在 `summary.diversity`、`summary.correctness`、`summary.total` 下报告
 `--diversity custom --reward-entry <入口.py>` 支持原 verl 逐 batch API，
 逐条 API 使用 `--per-row`。返回浮点数或含 `score` 的字典，分数为已加权的
 多样性奖励，探针会将它与所选的正确性奖励相加。
-跨用户覆盖率与案例需要同时返回 `cot_ok`、`success`、`n_refs` 和
-`references`。每个参考的 `row_index` 指向同一 batch 的 rollout，此外可返回
+启用归一化时，探针对自定义入口返回的 `score` 进行归一化，并沿用未入选行的分数。
+缺少 `cot_ok` 或 `success` 的时候，探针根据 CoT 和配置的 `success_mode` 补齐。
+跨用户覆盖率与案例还需返回 `n_refs` 和 `references`。使用 `norm=none` 时，
+由自定义入口提供 `cot_ok` 和 `success`。每个参考的 `row_index` 指向同一 batch 的 rollout，此外可返回
 `user_similarity` 和逐对 `td`。
 
 ---

@@ -64,6 +64,12 @@ def test_probe_replays_test_split_with_rollout_beam(tmp_path, monkeypatch):
     args = ["--cache", str(cache), "--diversity", "ngram", "--correctness", "rollout-beam"]
     combined = main(args + ["--out", str(tmp_path / "mixed.json")], cfg)
     unigram = main(args + ["--ngram-n", "1", "--out", str(tmp_path / "unigram.json")], cfg)
+    ranked = main(
+        args + ["--reward-kwargs", "norm=batch_rank", "--out", str(tmp_path / "ranked.json")], cfg
+    )
+    scaled = main(
+        args + ["--reward-kwargs", "norm=batch_minmax", "--out", str(tmp_path / "scaled.json")], cfg
+    )
     report = json.loads(combined.read_text())
     assert report["meta"]["diversity"] == "ngram"
     assert report["meta"]["correctness"] == "rollout-beam"
@@ -96,6 +102,13 @@ def test_probe_replays_test_split_with_rollout_beam(tmp_path, monkeypatch):
     assert reference["pair_td"] == 1.0
     assert reference["reward"] == 3.0
     assert json.loads(unigram.read_text())["reward_specific"]["zero_overlap"]["rate"] == 0
+    ranked_report = json.loads(ranked.read_text())
+    assert ranked_report["meta"]["settings"]["diversity"]["td_norm"] == "batch_rank"
+    assert ranked_report["cases"][1]["td"] == 0.0
+    assert ranked_report["cases"][1]["td_used"] == pytest.approx(1 / 3)
+    scaled_report = json.loads(scaled.read_text())
+    assert scaled_report["meta"]["settings"]["diversity"]["td_norm"] == "batch_minmax"
+    assert scaled_report["cases"][1]["td_used"] == 0.0
 
 
 @pytest.mark.parametrize(("args", "missing"), [
@@ -142,6 +155,41 @@ def test_custom_diversity_is_added_to_selected_correctness(tmp_path):
         "history": [],
     }])
     assert result == [{"base_reward": 3.0, "intrinsic": 0.5, "score": 3.5, "n_refs": 1}]
+
+
+@pytest.mark.parametrize(("mode", "expected"), [
+    ("group_minmax", [0.0, 1.0, 80.0, 100.0, 0.0]),
+    ("batch_minmax", [0.0, 0.25, 80.0, 100.0, 1.0]),
+    ("batch_rank", [0.0, 0.5, 80.0, 100.0, 1.0]),
+])
+def test_custom_diversity_normalizes_with_probe_eligibility(tmp_path, mode, expected):
+    entry = tmp_path / "custom.py"
+    entry.write_text(
+        "def score(data_sources, solution_strs, ground_truths, extra_infos):\n"
+        "    return [extra['value'] for extra in extra_infos]\n"
+    )
+    args = SimpleNamespace(
+        diversity="custom", correctness="rollout-beam", reward_entry=entry,
+        reward_name="score", per_row=False, reward_kwargs=[f"norm={mode}"],
+    )
+    score, settings = configure_reward({"rl": {}}, "Video_Games", {"sid_length": 3}, args)
+    rows = [
+        {
+            "data_source": "rec/Video_Games", "solution_str": f"{cot}</think>\n\n{sid}",
+            "ground_truth": GT, "history": [],
+            "extra_info": {
+                "split": "test", "index": query_index, "beam_search_results": [GT], "value": value,
+            },
+        }
+        for query_index, cot, sid, value in [
+            (0, SHARED, GT, 2.0), (0, RARE, GT, 4.0), (0, "short", GT, 80.0),
+            (1, SHARED, MISS, 100.0), (1, RARE, GT, 10.0),
+        ]
+    ]
+    results = score(rows)
+    assert settings["diversity"]["td_norm"] == mode
+    assert [result["intrinsic"] for result in results] == pytest.approx(expected)
+    assert [result["score"] for result in results] == pytest.approx([3 + value for value in expected])
 
 
 def test_cases_are_bounded_and_keep_only_eligible_candidates():

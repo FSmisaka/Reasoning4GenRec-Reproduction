@@ -76,21 +76,45 @@ def shape_rewards(
 
 
 def rank_normalize(values) -> "np.ndarray":
-    """把一组值按秩映射到 [0, 1] 均布(并列取平均秩, n<2 返回全 0)。
-
-    用于 td_norm="rank": GRPO 只关心组内相对排序, 而 TD 的组内绝对差
-    通常只有 ~0.01; 秩归一化让组内区分度由 lambda*sigma 直接控制。
-    """
+    """把一组值按秩映射到 [0, 1](并列取平均秩, n<2 返回全 0)。"""
     vals = np.asarray(values, dtype=np.float64)
     n = vals.size
     if n < 2:
         return np.zeros(n, dtype=np.float64)
-    ranks = np.empty(n, dtype=np.float64)
-    order = np.argsort(vals, kind="stable")
-    ranks[order] = np.arange(n, dtype=np.float64)
-    uniq, inv = np.unique(vals, return_inverse=True)
-    for u_i in range(uniq.size):
-        idx = np.where(inv == u_i)[0]
-        if idx.size > 1:
-            ranks[idx] = ranks[idx].mean()
-    return ranks / (n - 1)
+    _, inverse, counts = np.unique(vals, return_inverse=True, return_counts=True)
+    last_ranks = np.cumsum(counts) - 1
+    mean_ranks = last_ranks - (counts - 1) / 2
+    return mean_ranks[inverse] / (n - 1)
+
+
+def minmax_normalize(values) -> np.ndarray:
+    """将分数线性映射到 [0, 1]，空集合或所有分数相同时返回零。"""
+    vals = np.asarray(values, dtype=np.float64)
+    if vals.size == 0:
+        return vals
+    minimum = vals.min()
+    span = vals.max() - minimum
+    return np.zeros_like(vals) if span == 0 else (vals - minimum) / span
+
+
+def resolve_td_norm(mode: str) -> str:
+    """校验归一化方式并解析旧的 rank 别名。"""
+    mode = "group_rank" if mode == "rank" else str(mode)
+    modes = ("none", "group_rank", "batch_rank", "group_minmax", "batch_minmax")
+    if mode not in modes:
+        raise ValueError(f"未知 td_norm: {mode!r}，可选 {' | '.join(modes)}")
+    return mode
+
+
+def normalize_td(values, groups, eligible, mode: str) -> np.ndarray:
+    """按配置仅归一化符合条件的分数，保留其他行的原始值。"""
+    vals = np.asarray(values, dtype=np.float64)
+    if mode == "none":
+        return vals
+    normalize = rank_normalize if mode.endswith("_rank") else minmax_normalize
+    scopes = groups if mode.startswith("group_") else (range(len(vals)),)
+    used = vals.copy()
+    for scope in scopes:
+        indices = [i for i in scope if eligible[i]]
+        used[indices] = normalize(vals[indices])
+    return used

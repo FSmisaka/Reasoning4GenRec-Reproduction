@@ -24,7 +24,9 @@ from src.reward.interdiv.bleu import DiverBleu  # noqa: E402
 from src.reward.interdiv.similarity import NgramJaccard  # noqa: E402
 from src.reward.interdiv.cot_utils import extract_cot, is_recommendation_success  # noqa: E402
 from src.reward.interdiv.neighbor import build_same_user_mask, topk_neighbors  # noqa: E402
-from src.reward.interdiv.shaping import lambda_at, rank_normalize, shape_rewards  # noqa: E402
+from src.reward.interdiv.shaping import (  # noqa: E402
+    lambda_at, minmax_normalize, rank_normalize, shape_rewards,
+)
 from src.reward.interdiv.user_store import UserEmbeddingStore  # noqa: E402
 from src.reward.interdiv.reward import InterQueryDiversityAddon  # noqa: E402
 
@@ -457,6 +459,13 @@ def test_rank_normalize_distinct_ties_single():
     assert rank_normalize([0.3, 0.3]).tolist() == [0.5, 0.5]
 
 
+def test_minmax_normalize_preserves_spacing_and_handles_constant_values():
+    assert minmax_normalize([2.0, 4.0, 10.0]) == pytest.approx([0.0, 0.25, 1.0])
+    assert minmax_normalize([0.3, 0.3]).tolist() == [0.0, 0.0]
+    assert minmax_normalize([0.7]).tolist() == [0.0]
+    assert minmax_normalize([]).size == 0
+
+
 # --------------------------------------------------------------------------- #
 # Addon 端到端(合成数据)
 # --------------------------------------------------------------------------- #
@@ -679,10 +688,57 @@ def test_addon_td_norm_rank_spreads_within_group(addon, tmp_path):
     assert all("td" in r for r in group0)
 
 
-def test_addon_td_norm_rank_single_eligible_zero(addon):
-    """组内仅 1 条可塑形 rollout -> 无可比对象, 秩归一化后 td_used=0。"""
+@pytest.mark.parametrize(("mode", "expected"), [
+    ("group_rank", [0.0, 1.0, 0.0]),
+    ("batch_rank", [0.0, 0.75, 0.75]),
+    ("group_minmax", [0.0, 1.0, 0.0]),
+    ("batch_minmax", [0.0, 1.0, 1.0]),
+])
+def test_ngram_normalizes_only_eligible_rollouts_within_scope(addon, mode, expected):
+    ad, _, _ = addon(
+        n_queries=2, rollout_n=4, top_k_neighbors=1, lambda_init=0.3,
+        sigma=1.0, similarity="ngram_jaccard", ngram_n=2, td_norm=mode, seed=0,
+    )
+    rows = _make_batch([("train", 0, "alpha"), ("train", 1, "beta")])
+    rows[0]["solution_str"] = _resp("one two three four five", GT)
+    rows[1]["solution_str"] = _resp("one two three six seven", GT)
+    rows[2]["solution_str"] = _resp("too short", GT)
+    rows[3]["solution_str"] = _resp("completely different words in context", "<a_9><b_9><c_9>")
+    rows[4]["solution_str"] = _resp("one two three four six", GT)
+
+    results = ad.compute_batch(rows, [0.0] * len(rows))
+    eligible = [results[i] for i in (0, 1, 4)]
+    assert [result["td"] for result in eligible] == pytest.approx([0.4, 2 / 3, 2 / 3])
+    assert [result["td_used"] for result in eligible] == pytest.approx(expected)
+    assert [result["intrinsic"] for result in eligible] == pytest.approx(
+        [0.3 * value for value in expected]
+    )
+    assert (results[2]["cot_ok"], results[2]["success"], results[2]["td_used"]) == (0, 1, 0)
+    assert (results[3]["cot_ok"], results[3]["success"], results[3]["td_used"]) == (1, 0, 1)
+    assert results[2]["intrinsic"] == results[3]["intrinsic"] == 0
+
+
+def test_bleu_batch_minmax_uses_raw_td(addon):
+    ad, _, _ = addon(n_queries=2, top_k_neighbors=1, similarity="bleu",
+                     bleu_smoothing="method1", td_norm="batch_minmax")
+    rows = _make_batch([("train", 0, "alpha"), ("train", 1, "beta")])
+    rows[0]["solution_str"] = _resp("a completely different approach to gaming", GT)
+    rows[1]["solution_str"] = rows[4]["solution_str"]
+    results = ad.compute_batch(rows, [0.0] * len(rows))
+    eligible = [result for result in results if result["success"] and result["cot_ok"]]
+    low = min(result["td"] for result in eligible)
+    high = max(result["td"] for result in eligible)
+    assert high > low
+    assert [r["td_used"] for r in eligible] == pytest.approx([
+        (r["td"] - low) / (high - low) for r in eligible
+    ])
+
+
+@pytest.mark.parametrize("mode", ["rank", "batch_rank"])
+def test_addon_td_norm_rank_single_eligible_zero(addon, mode):
+    """归一化范围内仅 1 条可塑形 rollout 时 td_used 为 0。"""
     ad, n_q, g = addon(n_queries=2, rollout_n=4, top_k_neighbors=1,
-                       lambda_init=0.3, sigma=1.0, td_norm="rank")
+                       lambda_init=0.3, sigma=1.0, td_norm=mode)
     rows = _make_batch([("train", 0, "a"), ("train", 1, "b")], rollout_n=4)
     # 只保留 query0 第 0 条为成功, 其余改失败
     for i, r in enumerate(rows):

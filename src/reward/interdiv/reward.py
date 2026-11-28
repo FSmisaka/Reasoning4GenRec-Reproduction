@@ -26,18 +26,13 @@ import time
 import numpy as np
 
 from .bleu import DiverBleu
-from .cot_utils import extract_cot, recommendation_match
+from .cot_utils import extract_cot, is_usable_cot, recommendation_match
 from .llmjudge import HistoryLookup, LLMJudge, render_block
 from .neighbor import build_same_user_mask, topk_neighbors
 from .niche import NicheDiversityScorer
-from .shaping import lambda_at, rank_normalize, shape_rewards
+from .shaping import lambda_at, normalize_td, resolve_td_norm, shape_rewards
 from .similarity import NgramJaccard
 from .user_store import UserEmbeddingStore
-
-#: 参与比较的 CoT 最少 whitespace token 数(低于此值 td 记 0,
-#: 防止用退化空 CoT 刷多样性; DIVER 的 5-gram BLEU 对过短文本本就
-#: 无意义)
-_MIN_COT_TOKENS = 5
 
 #: niche 逐 rollout 诊断键的默认值。未评分 rollout(CoT 截断/过短)也必须
 #: 带这些键: verl BatchRewardManager 按 key 把逐行 dict 聚合成等长数组,
@@ -107,10 +102,9 @@ class InterQueryDiversityAddon:
             默认口径会让 intrinsic 恒 0, 可逐级放宽。
         bleu_smoothing: "none"(DIVER 官方) / "method1"(add-1 平滑,
             5-gram 不再几乎恒为 0, TD 有真实区分度)。
-        td_norm: "none" / "rank"。rank = 把每个 GRPO 组内(仅 I=1 的
-            rollout)的 TD 按秩映射到 [0, 1] 均布后再塑形。TD 的组内
-            绝对差通常极小(~0.01), 直接相加对 GRPO 组内排序几乎无影响;
-            秩归一化保证组内区分度由 λ·σ 直接控制(均值固定, 无常数平移)。
+        td_norm: "none" / "group_rank" / "batch_rank" / "group_minmax" / "batch_minmax"。
+            按 GRPO 组或按整个 batch 对 success 且 cot_ok 的 rollout 的原始 TD
+            做秩或 min-max 归一化，再进行奖励塑形。"rank" 是 "group_rank" 的旧别名。
         similarity: 多样性度量。"bleu" = SymBLEU(DIVER 官方口径, 含
             bleu_smoothing 选项); "ngram_jaccard" = 1 - n-gram 集合
             Jaccard(|G_n(a)∩G_n(b)| / |G_n(a)∪G_n(b)|); "llmjudge" =
@@ -189,9 +183,7 @@ class InterQueryDiversityAddon:
                 f"未知 reference_mode: {reference_mode!r}"
                 "(full | prefix | none; 旧别名 success/any 亦兼容)"
             )
-        self.td_norm = str(td_norm)
-        if self.td_norm not in ("none", "rank"):
-            raise ValueError(f"未知 td_norm: {td_norm!r}(none | rank)")
+        self.td_norm = resolve_td_norm(td_norm)
         # niche: 只对能拿到 intrinsic 的成功 rollout 算 d(失败行 intrinsic
         # 恒 0, 训练数学不变; 低成功率阶段可省 ~90% 的 BGE 计算)
         self.niche_only_success = bool(niche_only_success)
@@ -365,10 +357,7 @@ class InterQueryDiversityAddon:
                 results[r]["prefix_len"] = int(plen)
                 success_flags[r] = ok
                 cots[r] = extract_cot(row["solution_str"])
-                results[r]["cot_ok"] = int(
-                    cots[r] is not None
-                    and len(cots[r].split()) >= _MIN_COT_TOKENS
-                )
+                results[r]["cot_ok"] = int(is_usable_cot(cots[r]))
 
         def _usable(r) -> bool:
             return results[r]["cot_ok"] == 1
@@ -459,7 +448,7 @@ class InterQueryDiversityAddon:
                     if self.niche_only_success and not success_flags[r]:
                         continue
                     cot = cots[r]
-                    if cot is None or len(cot.split()) < _MIN_COT_TOKENS:
+                    if not _usable(r):
                         continue
                     niche_jobs.append(
                         (
@@ -488,7 +477,7 @@ class InterQueryDiversityAddon:
                 hist_lines = judge_history(keys[q_i], groups[keys[q_i]][0])
                 for r in groups[keys[q_i]]:
                     cot = cots[r]
-                    if cot is None or len(cot.split()) < _MIN_COT_TOKENS:
+                    if not _usable(r):
                         continue
                     start = len(pairs)
                     pairs.extend(
@@ -509,7 +498,7 @@ class InterQueryDiversityAddon:
                     continue
                 for r in groups[keys[q_i]]:
                     cot = cots[r]
-                    if cot is None or len(cot.split()) < _MIN_COT_TOKENS:
+                    if not _usable(r):
                         continue
                     distances = [self.scorer.diversity(cot, ref) for ref in refs_by_query[q_i]]
                     td_values[r] = float(np.mean(distances))
@@ -517,32 +506,17 @@ class InterQueryDiversityAddon:
                         for detail, distance in zip(results[r]["references"], distances):
                             detail["td"] = float(distance)
 
-        # 保留原始 TD 供回报/诊断(intrinsic 用可能归一化后的值)
-        td_raw = td_values.copy()
-
-        # ---- 可选: 组内秩归一化(仅重排"可塑形"的 rollout, 保证 GRPO 组内
-        # 区分度; 均值固定为 0.5 分布, 不引入组内常数平移) ----
-        if self.td_norm == "rank":
-            for key in keys:
-                rows_q = groups[key]
-                eligible = [
-                    r for r in rows_q
-                    if success_flags[r] and results[r].get("cot_ok", 0)
-                ]
-                m = len(eligible)
-                if m < 2:
-                    for r in eligible:
-                        td_values[r] = 0.0
-                    continue
-                vals = [td_values[r] for r in eligible]
-                for r, v in zip(eligible, rank_normalize(vals)):
-                    td_values[r] = float(v)
+        train_rows = [r for key in keys for r in groups[key]]
+        # 保留原始 TD 供诊断，塑形使用归一化后的值。
+        td_used = normalize_td(
+            td_values, groups.values(),
+            [result["success"] and result["cot_ok"] for result in results], self.td_norm,
+        )
 
         # ---- 塑形(只作用于本 batch 的 train 行) ----
-        train_rows = [r for key in keys for r in groups[key]]
         base_arr = np.array([base_rewards[r] for r in train_rows], dtype=np.float64)
         success_arr = np.array([success_flags[r] for r in train_rows], dtype=bool)
-        td_arr = td_values[train_rows]
+        td_arr = td_used[train_rows]
         if self.gamma == 1.0:
             token_counts = None
         else:
@@ -560,7 +534,7 @@ class InterQueryDiversityAddon:
             combine=self.combine,
         )
         for j, r in enumerate(train_rows):
-            results[r]["td"] = float(td_raw[train_rows][j])       # 原始 TD(诊断)
+            results[r]["td"] = float(td_values[r])               # 原始 TD(诊断)
             results[r]["td_used"] = float(td_arr[j])              # 塑形实际用值
             results[r]["intrinsic"] = float(intrinsic[j])
             results[r]["score"] = float(augmented[j])
@@ -576,7 +550,7 @@ class InterQueryDiversityAddon:
             n_rollouts=len(train_rows),
             base_rewards=base_arr,
             success_arr=success_arr,
-            td_arr=td_raw[train_rows],
+            td_arr=td_values[train_rows],
             intrinsic=intrinsic,
             augmented=augmented,
             neighbor_sim_mean=float(np.nanmean(sims_finite)) if sims_finite.size else 0.0,

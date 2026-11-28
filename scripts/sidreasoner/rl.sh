@@ -159,7 +159,7 @@ print(enc, path, iqd.get("top_k_neighbors", 8), iqd.get("same_user_jaccard", 0.8
       iqd.get("sigma", 0.5), iqd.get("bleu_div_len", 1000),
       iqd.get("seed", 0), iqd.get("metrics_path") or "-",
       iqd.get("success_mode", "full"), iqd.get("reference_mode", "success"),
-      iqd.get("bleu_smoothing", "none"), iqd.get("td_norm", "none"),
+      iqd.get("bleu_smoothing", "none"), iqd.get("norm", iqd.get("td_norm", "none")),
       iqd.get("similarity", "bleu"), iqd.get("ngram_n", 1),
       iqd.get("combine", "add"),
       iqd.get("judge_base_url", "http://localhost:8000/v1"),

@@ -19,6 +19,7 @@ import re
 _THINK_OPEN_RE = re.compile(r"<think>")
 
 SUCCESS_MODES = ("full", "prefix", "none")
+_MIN_COT_TOKENS = 5
 
 
 def extract_cot(response_str: str) -> str | None:
@@ -36,6 +37,11 @@ def extract_cot(response_str: str) -> str | None:
     m = _THINK_OPEN_RE.search(response_str)
     start = m.end() if m is not None else 0
     return response_str[start:close].strip()
+
+
+def is_usable_cot(cot: str | None) -> bool:
+    """判断提取出的 CoT 是否可用于多样性计算。"""
+    return cot is not None and len(cot.split()) >= _MIN_COT_TOKENS
 
 
 def recommendation_match(

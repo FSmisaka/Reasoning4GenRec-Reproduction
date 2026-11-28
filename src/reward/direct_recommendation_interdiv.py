@@ -123,7 +123,7 @@ def build_diversity_addon(kwargs: dict):
         success_mode=str(kwargs.get("success_mode", "full")),
         reference_mode=str(kwargs.get("reference_mode", "full")),
         bleu_smoothing=str(kwargs.get("bleu_smoothing", "none")),
-        td_norm=str(kwargs.get("td_norm", "none")),
+        td_norm=str(kwargs.get("norm", kwargs.get("td_norm", "none"))),
         similarity=str(kwargs.get("similarity", "bleu")),
         ngram_n=int(kwargs.get("ngram_n", 1)),
         combine=str(kwargs.get("combine", "add")),
