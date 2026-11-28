@@ -195,7 +195,7 @@ make games-sidreasoner-rl-beam-llmjudge  # 同上, TD = 1 - LLM-Judge 语义相�
 
 # 探针
 make games-sidreasoner-rollout-cache   # Stage 2 测试集每个 query 保存 16 条 rollout 和 beam
-make games-sidreasoner-reward-probe ARGS="--diversity ngram --correctness rollout-beam --ngram-n 2"
+make games-sidreasoner-reward-probe ARGS="--diversity ngram --correctness rollout-beam"
 
 # 评估(目录名对应 think_rolloutbeam / think_rolloutbeam_div / think_bleu)
 make games-sidreasoner-think MODEL=checkpoints/RecRL_Reasoning/Video_Games_stage3_rl_Qwen3-1.7B_rolloutbeam/global_step_100/actor_merged
@@ -290,3 +290,13 @@ INPUT=<同上路径> PAIR_CAP=2000 DEVICE=cuda make games-diversity-analyze   # 
 统计: TF-IDF/bigram 频率、TTR/熵(含/去停用词)、完全重复率、成对余弦与
 Jaccard、首句模板集中度、gzip 压缩率、最相似样本对 Top-3(text=剔除 SID /
 raw=保留 SID 双视角)。早期结论: 多样性坍缩发生在 Stage 2 SFT 并延续到 RL。
+
+收集多个 step 的分析结果后，传入其所在目录即可绘制指标随 step 变化的曲线。
+
+```bash
+.venv/bin/python -m src.analysis.diversity_curves results/diversity/Games/think_steprule
+```
+
+默认绘制文本的成对余弦相似度和 3-gram Jaccard 相似度均值，图片保存为输入目录下的
+`diversity_curves.png`。用 `--out` 指定输出路径，或编辑
+[`src/analysis/diversity_curves.py`](src/analysis/diversity_curves.py) 的 `DEFAULT_SERIES` 选择曲线。
